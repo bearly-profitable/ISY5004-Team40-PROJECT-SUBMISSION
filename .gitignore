@@ -1,0 +1,44 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.claude/
+.cursor/
+
+# Project-specific
+Latex format/
+
+# Backend artifacts
+backend/jobs/
+backend/images/
+backend/outputs/
+backend/face_landmarker.task
+backend/=0.10.0
+
+# Node
+node_modules/
+
+# Jupyter
+.ipynb_checkpoints/
