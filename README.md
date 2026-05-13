@@ -1,12 +1,14 @@
 # Lumina: AI-Powered Photo Curation & Management Platform
 
+> **In this repo, we have:** 1 full report PDF, 1 full presentation video MP4, 1 research and tuning Python notebook, and 1 full codebase (frontend + backend) for our webapp.
+
 A photo management system that clusters, scores, and curates photo collections using computer vision and ML. Upload a batch of photos, get back the best shot of each person at each event.
 
 ## Project Explanation & Demo
 
-Watch our platform in action: [YouTube Demo](#)
+Watch our platform in action: [Full Recorded Presentation Link](https://youtu.be/63fbOCV3cN4)
 
-Visit our website to test it yourself: [Live Demo](#)
+Visit our website to test it yourself: [Live Link](https://lumina-production-639d.up.railway.app/)
 
 ## System Architecture
 
