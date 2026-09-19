@@ -2,9 +2,11 @@
 export interface Photo {
   id: string;
   url: string;
+  /** Full-resolution URL when `url` is a thumbnail (restored sessions). */
+  fullUrl?: string;
   name: string;
   size: string;
-  source?: 'drive' | 'local';
+  source?: 'local' | 'session';
 }
 
 export interface Cluster {
@@ -14,6 +16,31 @@ export interface Cluster {
   topPhotoId: string;
   faceThumb?: string | null;
 }
+
+export type SignalKey =
+  | 'centrality'
+  | 'nimaScore'
+  | 'faceSharpness'
+  | 'faceSize'
+  | 'detScore'
+  | 'poseQuality'
+  | 'ear';
+
+export type NormSignals = Record<SignalKey, number>;
+
+export interface ExplanationReason {
+  signal: SignalKey;
+  label: string;
+  detail: string;
+  strength: number;
+}
+
+export interface Explanation {
+  summary: string;
+  reasons: ExplanationReason[];
+}
+
+export type RejectFlag = 'duplicate' | 'blurry' | 'eyes_closed' | 'low_quality';
 
 export interface EventMember {
   photoId: string;
@@ -25,17 +52,47 @@ export interface EventMember {
   poseQuality: number;
   ear: number;
   nimaScore: number;
+  normSignals?: NormSignals;
+  explanation?: Explanation;
+  flags?: RejectFlag[];
+  duplicateOf?: string;
+}
+
+export interface BestByPerson {
+  personId: string;
+  photoId: string;
+  score: number;
+  numCandidates: number;
+  explanation?: Explanation;
+}
+
+export type MmrMode = 'safe' | 'balanced' | 'diverse';
+
+export interface EventAutoLabel {
+  label: string;
+  confidence: number;
 }
 
 export interface Event {
   id: string;
   label: string;
+  autoLabel?: EventAutoLabel | null;
+  caption?: string | null;
+  startTime?: number | null;
+  endTime?: number | null;
+  dateLabel?: string | null;
   photoIds: string[];
   topPhotoId: string;
   persons: string[];
   members: EventMember[];
+  bestByPerson?: BestByPerson[];
+  mmrPicks?: Partial<Record<MmrMode, string[]>>;
+  userPinned?: boolean;
   photos: Photo[];
 }
+
+/** Normalised [x1, y1, x2, y2] face box, 0..1 fractions of the image. */
+export type FaceBox = [number, number, number, number];
 
 export interface Identity {
   id: string;
@@ -43,14 +100,41 @@ export interface Identity {
   faceThumb?: string | null;
   photoIds: string[];
   eventIds: string[];
+  /** photoId -> this person's face location in that photo */
+  faceBoxes?: Record<string, FaceBox>;
+}
+
+export interface SessionSummary {
+  jobId: string;
+  createdAt: number;
+  numPhotos: number;
+  summary?: {
+    numPhotos: number;
+    numEvents: number;
+    numIdentities: number;
+  } | null;
+  topPhotoId?: string | null;
+}
+
+export interface SearchResult {
+  photoId: string;
+  score: number;
+}
+
+export interface PreferenceState {
+  weights: NormSignals;
+  defaultWeights: NormSignals;
+  nUpdates: number;
+  feedbackCount?: number;
 }
 
 export enum AppStep {
   LANDING = 'landing',
-  DRIVE_VIEW = 'drive-view',
+  UPLOAD = 'upload',
   PROCESSING = 'processing',
   GALLERY = 'gallery',
-  FACE_ANALYSIS = 'face-analysis'
+  FACE_ANALYSIS = 'face-analysis',
+  SESSIONS = 'sessions'
 }
 
 export interface FaceMetrics {

@@ -31,6 +31,8 @@ Thumbs.db
 Latex format/
 
 # Backend artifacts
+backend/lumina.db*
+backend/eval/eval_cache.db*
 backend/jobs/
 backend/images/
 backend/outputs/

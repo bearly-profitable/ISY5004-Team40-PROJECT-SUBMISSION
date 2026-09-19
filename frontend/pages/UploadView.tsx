@@ -1,18 +1,16 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import { Photo } from '../types';
-import { Search, Play, FolderClosed, Check, ImageIcon, RefreshCw, Upload, HardDrive } from 'lucide-react';
+import { Search, Play, Images, Check, ImageIcon, Upload } from 'lucide-react';
 import { GlassCarousel } from '../components/GlassCarousel';
 
-interface DriveViewProps {
+interface UploadViewProps {
   onAnalyze: (selectedPhotoIds: string[]) => void | Promise<void>;
   photos: Photo[];
-  folderName: string;
-  onReconnect: () => Promise<void> | void;
   onLocalUpload?: (files: FileList) => void;
-  isConnecting?: boolean;
   isAnalyzing?: boolean;
   analyzeError?: string | null;
+  maxPhotos: number;
 }
 
 function formatFileSize(bytes: number): string {
@@ -21,15 +19,13 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const DriveView: React.FC<DriveViewProps> = ({
+export const UploadView: React.FC<UploadViewProps> = ({
   onAnalyze,
   photos,
-  folderName,
-  onReconnect,
   onLocalUpload,
-  isConnecting = false,
   isAnalyzing = false,
   analyzeError = null,
+  maxPhotos,
 }) => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
@@ -120,7 +116,8 @@ export const DriveView: React.FC<DriveViewProps> = ({
           </div>
           <h2 className="text-2xl font-semibold tracking-tight mb-2">Get started</h2>
           <p className="text-sm text-slate-400 mb-8 max-w-md mx-auto leading-relaxed">
-            Upload photos from your device or connect Google Drive to begin analyzing your images.
+            Drop a batch of photos from one event and Lumina will group them, find the
+            people, and pick the best shot of everyone.
           </p>
           <div className="flex items-center justify-center gap-3 flex-wrap">
             <button
@@ -130,17 +127,9 @@ export const DriveView: React.FC<DriveViewProps> = ({
               <Upload className="w-4 h-4" />
               Upload Photos
             </button>
-            <button
-              onClick={() => onReconnect()}
-              disabled={isConnecting}
-              className="glass-btn px-6 py-3 rounded-xl text-sm font-medium flex items-center gap-2"
-            >
-              <HardDrive className="w-4 h-4" />
-              {isConnecting ? 'Connecting...' : 'Google Drive'}
-            </button>
           </div>
           <p className="text-xs text-slate-400 mt-6">
-            Drop photos here or click to browse &middot; Accepts image files &middot; Max 80 photos
+            Drop photos here or click to browse &middot; Accepts image files &middot; Max {maxPhotos} photos
           </p>
         </div>
       </div>
@@ -177,8 +166,8 @@ export const DriveView: React.FC<DriveViewProps> = ({
       <div className="flex items-center justify-between gap-4 mb-5 anim-fade-in-up">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-lumina-400 font-medium text-[10px] uppercase tracking-widest mb-1">
-            <FolderClosed className="w-3 h-3 shrink-0" />
-            <span className="truncate">{`Drive / ${folderName}`}</span>
+            <Images className="w-3 h-3 shrink-0" />
+            <span className="truncate">Your upload</span>
           </div>
           <div className="flex items-baseline gap-3">
             <h2 className="text-xl font-semibold tracking-tight">Select Photos</h2>
@@ -198,14 +187,6 @@ export const DriveView: React.FC<DriveViewProps> = ({
             className="glass-btn p-2 rounded-lg text-slate-400 hover:text-white transition-colors"
           >
             <Upload className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onReconnect()}
-            disabled={isConnecting}
-            title="Reconnect"
-            className="glass-btn p-2 rounded-lg text-slate-400 hover:text-white transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isConnecting ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={selectAll}

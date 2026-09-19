@@ -21,7 +21,7 @@ import type { Photo, FaceAnalysisResult, FaceResult, FaceMetrics } from '../type
 import { startFaceAnalysis, getFaceAnalysisStatus } from '../lib/analysisApi';
 
 interface AnalysisProps {
-  drivePhotos: Photo[];
+  photos: Photo[];
 }
 
 type AnalysisState = 'idle' | 'processing' | 'done' | 'error';
@@ -283,7 +283,7 @@ const DrivePickerModal: React.FC<{
 };
 
 // ========== Main Analysis Component ==========
-export const Analysis: React.FC<AnalysisProps> = ({ drivePhotos }) => {
+export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
   const [state, setState] = useState<AnalysisState>('idle');
   const [selectedImage, setSelectedImage] = useState<string | null>(null); // data URL or blob URL
   const [selectedName, setSelectedName] = useState('');
@@ -423,7 +423,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ drivePhotos }) => {
                 Upload Photo
               </button>
 
-              {drivePhotos.length > 0 && (
+              {photos.length > 0 && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setShowDrivePicker(true); }}
                   className="glass-btn px-6 py-2.5 rounded-full text-sm font-medium flex items-center gap-2 text-slate-600"
@@ -459,7 +459,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ drivePhotos }) => {
 
         {showDrivePicker && (
           <DrivePickerModal
-            photos={drivePhotos}
+            photos={photos}
             onSelect={handleDriveSelect}
             onClose={() => setShowDrivePicker(false)}
           />

@@ -77,7 +77,7 @@ export const Landing: React.FC = () => {
         { title: 'Quality Ranking', description: 'Ranks every shot by lighting, composition, and sharpness to surface your best work.', media: 'https://assets.codepen.io/7558/orange-portrait-002.jpg' },
         { title: 'AI Powered', description: 'Driven by DINOv2 embeddings and YOLOv10 classification for intelligent photo analysis.', media: 'https://assets.codepen.io/7558/orange-portrait-003.jpg' },
         { title: 'Lightning Fast', description: 'Process hundreds of photos in seconds with an optimized machine learning pipeline.', media: 'https://assets.codepen.io/7558/orange-portrait-004.jpg' },
-        { title: 'Privacy First', description: 'Your photos never leave Google Drive. Only metadata is analyzed, nothing is stored.', media: 'https://assets.codepen.io/7558/orange-portrait-005.jpg' },
+        { title: 'Privacy First', description: 'Your photos are processed for your session only and auto-deleted within 24 hours.', media: 'https://assets.codepen.io/7558/orange-portrait-005.jpg' },
         { title: 'Smart Gallery', description: 'Gallery-ready results beautifully curated, organized, and presented for you.', media: 'https://assets.codepen.io/7558/orange-portrait-006.jpg' },
       ];
 

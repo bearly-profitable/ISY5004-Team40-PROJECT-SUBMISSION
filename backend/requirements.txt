@@ -22,3 +22,5 @@ tqdm
 packaging
 torchreid
 gdown
+reportlab
+httpx

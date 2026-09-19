@@ -2,7 +2,7 @@
 
 > **In this repo, we have:** 1 full report PDF, 1 full presentation video MP4, 1 research and tuning Python notebook, and 1 full codebase (frontend + backend) for our webapp.
 
-A photo management system that clusters, scores, and curates photo collections using computer vision and ML. Upload a batch of photos, get back the best shot of each person at each event.
+A photo management system that clusters, scores, curates, explains, and *learns from* photo collections using computer vision and ML. Upload a batch of photos, get back the best shot of each person at each event — with a natural-language explanation of why, semantic text search over the collection, and a taste profile that adapts to your feedback.
 
 ## Project Explanation & Demo
 
@@ -18,12 +18,13 @@ Visit our website to test it yourself: [Live Link](https://lumina-production-639
 
 | Layer | What happens |
 |-------|--------------|
-| **Client & Deployment** | User uploads photos (Google Drive OAuth or local drag-and-drop) via the React SPA. The FastAPI backend receives them and spawns a background thread job. Docker containers are served on Railway behind nginx. |
-| **Feature Extraction** | Three streams run in parallel on every image: ArcFace produces 512-D face identity vectors + quality signals; YOLOv8 detects full-body bounding boxes for occluded-face cases; DINOv2 encodes the scene context. Body crops are then fed through OSNet for 512-D re-ID embeddings used as a face fallback. |
-| **Identity Clustering** | HDBSCAN groups people across photos using face embeddings (primary) with body embeddings as fallback. No manual epsilon — density-adaptive with noise reassignment. |
-| **Event Clustering** | Agglomerative clustering on DINOv2 scene vectors with an automatically-swept distance threshold (silhouette score optimisation) groups photos into meaningful moments/scenes. |
-| **Multi-Signal Scoring** | Seven quality signals are combined into a weighted composite score (min-max normalised per event group). The highest-scoring photo per Event × Identity pair is selected as the "best" shot. |
-| **Smart Gallery** | Results are rendered in an interactive gallery — browsable by event and by person, with full score breakdowns and an optional facial geometry deep-dive (MediaPipe FaceMesh). |
+| **Client & Deployment** | User uploads photos (drag-and-drop or file picker) via the React SPA. The FastAPI backend enqueues a job on a single-worker queue (the ML models are shared, so jobs run strictly one at a time). Docker containers are served on Railway behind nginx. |
+| **Feature Extraction** | Four streams run in parallel on every image: ArcFace produces 512-D face identity vectors + quality signals; YOLOv8 detects full-body bounding boxes; DINO encodes the scene context; CLIP encodes semantics for search and event naming. Body crops are fed through OSNet for 512-D re-ID embeddings. Per-image features are cached in SQLite keyed by content hash — re-analysing seen photos skips inference entirely. |
+| **Identity Clustering** | Faces are matched to bodies by greedy IoU/containment (one face per body). Each face becomes a **confidence-weighted fused embedding** `e_fused = α·e_face ⊕ (1−α)·e_body` (α from detection confidence + face size), clustered with agglomerative clustering (cosine, average linkage). Faceless detections attach to the nearest identity by ReID centroid. HDBSCAN handles the no-faces fallback. |
+| **Event Clustering** | Agglomerative clustering on DINO scene vectors with an automatically-swept distance threshold (silhouette score optimisation) groups photos into events. Events are then **auto-named zero-shot** by comparing their CLIP centroid to a prompt bank ("Wedding", "Beach", "Hiking", …). |
+| **Multi-Signal Scoring** | Seven quality signals are combined into a weighted composite (min-max normalised per event). The best shot is selected **per event and per person** — each person's photos are re-scored with *their own* face signals. Every selection ships with a template-generated explanation. |
+| **Diversity & Personalisation** | MMR (Maximal Marginal Relevance) produces diversity-aware highlight sets in three modes (Quality / Balanced / Diverse). User "promote to best" swaps are logged as pairwise preferences and learned via Bradley-Terry SGD into a personal 7-signal weight vector that can re-rank any session. |
+| **Smart Gallery** | Interactive gallery: events, people, per-person best shots, score breakdowns, "why this photo?" explanations, CLIP text search, human-in-the-loop cluster corrections (rename/merge people, re-pin best shots — persisted server-side), album export as zip, and a persistent session history. |
 
 ---
 
@@ -31,105 +32,180 @@ Visit our website to test it yourself: [Live Link](https://lumina-production-639
 
 ### 1. Photo Ingestion
 
-The application supports two photo import methods:
+- **Local upload only** — drag-and-drop or file-picker. Nothing to connect, no OAuth,
+  no third-party account. Photos are deleted with the job after `JOB_TTL_HOURS`.
 
-- **Google Drive integration** — authenticate via OAuth and select a Drive folder; photos are streamed directly without ever being stored on our servers
-- **Local upload** — drag-and-drop or file-picker upload of images from your device
+Up to **200 photos** per analysis run (the embedding cache makes repeat runs near-instant).
 
-A maximum of **80 photos** per analysis run keeps processing focused and fast.
+### 2. AI Analysis Pipeline
 
----
-
-### 2. AI Analysis Pipeline (6-Stage Processing)
-
-#### Stage 1: Parallel Feature Extraction
-
-Three independent streams run simultaneously on every image:
+#### Stage 1: Parallel Feature Extraction (cache-aware)
 
 | Stream | Model | Output |
 |--------|-------|--------|
-| **Face Detection & Embedding** | InsightFace / ArcFace (buffalo_l) | 512-d identity vectors + quality signals (sharpness, pose angles, detection confidence) |
+| **Face Detection & Embedding** | InsightFace / ArcFace (buffalo_l) | 512-d identity vectors + quality signals (sharpness, pose, confidence, eye-aspect ratio) |
 | **Person Detection** | YOLOv8 Nano | Full-body bounding boxes + crops |
-| **Scene Embedding** | DINOv2 (ViT-S/14) | Scene-level context vectors for event grouping |
+| **Scene Embedding** | DINOv3 ViT-S/16 (DINOv2 fallback) | Scene-level context vectors for event grouping |
+| **Semantic Embedding** | CLIP ViT-B/32 | 512-d embeddings for text search + zero-shot event naming |
 
-All images are resized to a maximum of 1280 px before processing.
+Every per-image feature bundle is cached in SQLite keyed by the image's SHA-256, so previously analysed photos are never re-processed.
 
 #### Stage 2: Body Re-Identification
 
-Detected person crops are passed through **OSNet** (torchreid) to produce 512-d body embeddings. These serve as a robust fallback for identity matching when faces are occluded or partially visible.
+Person crops → **OSNet** (torchreid) 512-d body embeddings, used both as fusion input and as the occluded-face fallback.
 
-#### Stage 3: Identity Clustering
+#### Stage 3: Identity Clustering (confidence-weighted fusion)
 
-Face embeddings (primary) and body embeddings (fallback) are clustered with **HDBSCAN**:
+1. Faces are assigned to person boxes by **greedy IoU/containment matching** with a head-position prior — one face per body, robust to overlapping people in group shots.
+2. Each face record gets a fused embedding: `α` ramps with ArcFace detection confidence and face size (floor 0.5 — a detected face is always the primary identity signal). The fusion lives in a concatenated space where cosine similarity equals the α-weighted blend of face and body similarities.
+3. Agglomerative clustering (cosine distance, average linkage) over fused embeddings; faceless detections attach via ReID centroid distance; pure-ReID HDBSCAN as the no-faces fallback.
+4. Ablation modes are built in: `identity_mode = fused | face_only | body_only` (see `eval/`).
 
-- No manual epsilon parameter required — handles variable-density clusters automatically
-- Noise points are reassigned to the nearest cluster centroid
-- Cosine distance threshold: **0.6** (face) · **0.75** (body fallback)
+#### Stage 4: Event Clustering + Zero-Shot Naming
 
-Each cluster corresponds to one unique individual across the entire photo collection.
+DINO embeddings → agglomerative clustering with a silhouette-swept threshold (0.1–3.0, early-stopped). Each event's CLIP centroid is compared against a 20-entry prompt bank; confident matches replace "Event N" with names like "Beach" or "Graduation".
 
-#### Stage 4: Event Clustering
+#### Stage 5: Multi-Signal Scoring, Per-Person Selection & Explanations
 
-DINOv2 scene embeddings are grouped via **Agglomerative Clustering** (average linkage, cosine distance). The optimal cluster threshold is selected automatically by sweeping over a silhouette score across the range 0.1–3.0.
+Seven signals, min-max normalised within each event:
 
-#### Stage 5: Multi-Signal Scoring
-
-Every photo receives a composite quality score from seven weighted signals, **min-max normalised within each event group** for fair comparison:
-
-| Signal | Weight | Description |
+| Signal | Default Weight | Description |
 |--------|--------|-------------|
-| **Centrality** | 0.25 | Cosine similarity to the event's DINOv2 centroid — how representative the shot is |
-| **NIMA Score** | 0.25 | Neural Image Assessment aesthetic quality (0–10, via pyiqa) |
-| **Face Sharpness** | 0.15 | Laplacian variance of isolated face region |
-| **Face Size** | 0.10 | Face bounding box area relative to full image |
-| **Detection Confidence** | 0.10 | InsightFace raw detection score |
-| **Pose Quality** | 0.10 | Penalty for yaw / pitch / roll deviation from frontal |
-| **Eye Aspect Ratio** | 0.05 | Open-eye detection to prevent blink selections |
+| **Centrality** | 0.25 | Cosine similarity to the event's DINO centroid |
+| **NIMA Score** | 0.25 | Neural Image Assessment aesthetic quality (0–10) |
+| **Face Sharpness** | 0.15 | Laplacian variance of the face region |
+| **Face Size** | 0.10 | Face area relative to the image |
+| **Detection Confidence** | 0.10 | InsightFace detection score |
+| **Pose Quality** | 0.10 | Penalty for yaw / pitch / roll deviation |
+| **Eye Aspect Ratio** | 0.05 | Open-eye detection (anti-blink) |
 
-The **top-ranked photo per event × identity combination** is surfaced as the "best" shot.
+- **Per event**: top composite score wins, with an explanation ("sharpest face, eyes open, most representative of the scene; beat the runner-up mainly on pose").
+- **Per event × person**: each person's candidate photos are re-scored using *that person's* face signals — the true "best shot of each person at each event".
+- **MMR highlights**: `λ·relevance − (1−λ)·max-similarity-to-selected` at λ = 0.9 / 0.7 / 0.45 gives Quality / Balanced / Diverse showcase sets.
 
 #### Stage 6: Facial Geometry Analysis (Bonus Feature)
 
-An optional deep-dive face analysis uses **MediaPipe FaceMesh** (468 landmarks) to score:
-- Symmetry & golden-ratio proportions
-- Skin quality
-- Eye, nose, lip, and jawline metrics
+Optional deep-dive with **MediaPipe FaceMesh** (468 landmarks): symmetry, proportions, skin quality, per-feature scores.
 
----
+### 3. Learning From Feedback (Pairwise Preference Learning)
 
-### 3. Smart Gallery & Results
+When a user promotes a different photo to "Best Shot", that is a pairwise observation *winner ≻ loser*. Lumina runs one Bradley-Terry SGD step over the normalised 7-signal difference vector, with an L2 pull toward the default weights and simplex projection. The learned per-user weights:
 
-After processing, the results are presented in a full-featured gallery interface:
+- are visible in the UI ("My Taste" panel, learned vs default per signal),
+- can re-rank any session on demand (`POST /api/rescore/{jobId}`),
+- converge on synthetic users in ~20–60 swaps (see `backend/eval/eval_preferences.py`).
 
-- **Event view** — photos grouped into auto-detected events with the top-ranked shot highlighted
-- **Identity view** — face-thumbnail clusters linking an individual across all events
-- **Score breakdown** — per-image signal contributions visible on hover
-- **Real-time progress** — live step-by-step status during analysis (Loading models → Feature extraction → Clustering → Scoring → Complete)
+### 4. Human-in-the-Loop Corrections
+
+All persisted server-side and logged (the corrections log doubles as evaluation data):
+
+- rename / **merge** identity clusters, move photos between people
+- re-pin an event's best shot (also feeds preference learning)
+- rename / delete events
+
+### 5. One-Click AI Enhancement (identity-guarded)
+
+Every pick in the showcase carries an **Enhance** button. The photo is sent to an
+OpenRouter image-edit model under a deliberately constrained retouch prompt, then
+verified before it is ever shown:
+
+1. **Constrained prompt** — retouch vocabulary only (skin tone, blemishes, eyes,
+   exposure, colour, noise), with explicit prohibitions on reshaping features,
+   slimming, de-ageing, changing ethnicity, re-framing or altering the aspect ratio.
+2. **ArcFace identity guard** — every face in the original is matched to its closest
+   counterpart in the result using the same InsightFace model the pipeline already
+   loads. The *weakest* per-face similarity becomes the identity score, so one drifted
+   face in a group shot is still caught.
+   - `< 0.45` → the edit is **discarded** and the user is told why
+   - `0.45 – 0.65` → shown with a drift warning
+   - `≥ 0.65` → accepted, with the match percentage surfaced in the UI
+   - no face detected → shown, flagged as unverified
+
+Enhancements are non-destructive: the original is never overwritten, the card toggles
+between the two, one click reverts, and the album export can use either. Results
+persist with the session and cost ~$0.07 per photo.
+
+### 6. Themed PDF Album Export
+
+An **Album** button turns the current selection into a designed, printable PDF rather
+than a contact sheet:
+
+- **Four themes** — Midnight, Ivory, Blush, Mono. Palette, gradient background, film
+  grain and typography travel together.
+- **Varied mosaics** — layout templates for 1–6 photos per page, alternating between
+  pages so a long album never falls into a uniform grid.
+- **Cover page** with the album title, an accent rule and a hero image.
+- **Cover-cropped** photos with rounded corners and soft Pillow-rendered shadows; no
+  letterboxing, no distorted aspect ratios.
+- **Captions** drawn from the real clustering — event label plus the people in each shot.
+- **AI titles** (optional) — the text model names the album from actual event labels
+  and person names, e.g. "Beach Afternoon" + "Dinner" → *"Beach to Dinner"*. It is
+  instructed never to invent places, dates or occasions, and falls back to the first
+  event label if the call fails.
+
+Rendering splits Pillow (gradients, crops, masks, shadows) and ReportLab (vector type,
+rules, page structure). Slot composites are embedded as JPEG rather than alpha PNG,
+which took a three-page album from ~9 MB to ~880 KB.
+
+### 7. Smart Gallery & Results
+
+- **Event view** with per-person best-shot strips and explanations
+- **Showcase mode** with MMR diversity modes (Quality / Balanced / Diverse)
+- **Semantic search** box — "group hug", "sunset", "someone laughing" (CLIP; brute-force cosine is exact and instant at this scale, no ANN index needed)
+- **Sessions** page — every analysis persists in SQLite and reopens anytime (with corrections applied); photos are served from the backend
+- **Export** — download the current curated selection as a zip
 
 ---
 
 ## Machine Learning Architecture
 
-### Models & Algorithms
-
 | Model / Algorithm | Role | Key Detail |
 |-------------------|------|------------|
-| **InsightFace** (ArcFace, buffalo_l) | Face detection + identity embedding | 512-d cosine-comparable vectors; extracts sharpness, pose, and confidence |
-| **YOLOv8 Nano** | Person detection | Body bounding boxes for occluded-face fallback |
-| **OSNet** (torchreid) | Body re-identification | 512-d body embeddings on 256×128 crops |
-| **DINOv2** (ViT-S/14) | Scene understanding | Self-supervised ViT; captures background, lighting, and spatial layout |
-| **HDBSCAN** | Identity clustering | Density-adaptive, noise-robust, no manual epsilon |
-| **Agglomerative Clustering** | Event clustering | Average linkage + silhouette sweep (0.1–3.0) for automatic threshold |
-| **NIMA** (pyiqa) | Aesthetic scoring | Neural Image Assessment; composition, colour harmony, exposure (0–10) |
-| **MediaPipe FaceMesh** | Facial geometry | 468 landmarks; symmetry, proportions, skin quality |
+| **InsightFace** (ArcFace, buffalo_l) | Face detection + identity embedding | 512-d cosine-comparable vectors + quality signals |
+| **YOLOv8 Nano** | Person detection | Body boxes for fusion + occluded-face fallback |
+| **OSNet** (torchreid) | Body re-identification | 512-d embeddings on 256×128 crops |
+| **DINOv3** (ViT-S/16, DINOv2 fallback) | Scene understanding | Self-supervised ViT for event grouping |
+| **CLIP** (ViT-B/32) | Semantics | Text-image search + zero-shot event naming |
+| **Agglomerative Clustering** | Identity (fused space) + events | Cosine, average linkage; silhouette-swept threshold for events |
+| **HDBSCAN** | No-face fallback clustering | Density-adaptive on ReID embeddings |
+| **NIMA** (pyiqa) | Aesthetic scoring | Composition, colour, exposure (0–10) |
+| **MMR** | Diversity-aware selection | λ-tunable relevance/diversity trade-off |
+| **Bradley-Terry SGD** | Preference learning | Personal signal weights from pairwise swaps |
+| **MediaPipe FaceMesh** | Facial geometry | 468 landmarks (bonus feature) |
 
-### Composite Score Formula
+---
 
-```
-Score(i) = Σ wₖ × normalised_signal_k(i)
+## Engineering
 
-All signals are min-max normalised within each event group before weighting.
-```
+| Concern | Implementation |
+|---------|----------------|
+| **Persistence** | SQLite (`backend/lumina.db`): jobs, results, feedback, preferences, corrections log, embedding cache. Sessions survive restarts. |
+| **Concurrency** | Single-worker job queue — the shared model objects are not thread-safe, so analyses run one at a time; interrupted jobs are marked failed on restart. |
+| **Incremental speed** | Per-image feature cache keyed by content SHA-256 (`cache_version` salt invalidates on pipeline changes). Warm re-runs skip all inference. |
+| **Job hygiene** | Hourly TTL cleanup deletes job rows + input files older than `JOB_TTL_HOURS` (default 24) and prunes the cache. |
+| **Auth** | Optional shared-secret: set `LUMINA_API_KEY` (backend) + `VITE_API_KEY` (frontend); photo serving stays open (unguessable job UUIDs). |
+| **Tests** | `backend/tests/` — 105 pytest tests: pure-math units (fusion, MMR, IoU matching, explanations, preference learning, corrections, store, collage layout/rendering, the enhancement identity guard, the OpenRouter client) + API integration with a mocked pipeline and a mocked OpenRouter. |
+| **CI** | GitHub Actions: backend unit tests + frontend typecheck/build on every push. |
+| **Evaluation** | `backend/eval/` — scripts for identity-clustering ablations (ARI/NMI), event clustering, search Recall@K, preference convergence, and cache speedup. See `backend/eval/README.md`. |
+
+### API Surface
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/analyze`, `GET /api/analyze/{id}` | Start / poll an analysis job |
+| `GET /api/sessions`, `GET /api/sessions/{id}` | Persistent session history |
+| `GET /api/photos/{jobId}/{photoId}` | Serve stored photos for reopened sessions |
+| `POST /api/search/{jobId}` | CLIP text→image search |
+| `POST /api/feedback` | Pairwise swap → preference update + pin |
+| `GET/POST /api/preferences[...]` | Taste profile read / reset |
+| `POST /api/rescore/{jobId}` | Re-rank with personal weights |
+| `POST /api/corrections/{jobId}` | Cluster corrections (rename/merge/move/pin/delete) |
+| `POST /api/export/{jobId}` | Zip download of a curated selection |
+| `POST /api/enhance`, `GET /api/enhance/{id}` | Start / poll an AI enhancement |
+| `GET/DELETE /api/enhanced/{jobId}/{photoId}` | Serve or discard an enhanced photo |
+| `GET /api/collage/themes` | Available album themes |
+| `POST /api/collage/{jobId}` | Themed PDF album download |
+| `POST /api/face-analysis` | Facial geometry deep-dive |
 
 ---
 
@@ -140,82 +216,23 @@ All signals are min-max normalised within each event group before weighting.
 | Technology | Purpose |
 |------------|---------|
 | **React 19** with TypeScript | UI framework |
-| **Vite 6** | Build tool & dev server |
-| **Three.js** + **GSAP** | WebGL landing page with glass-refraction shader transitions |
-| **Lucide React** | Icon library |
-| **Vanilla CSS** | Custom glass-morphism design system |
+| **Vite 6** | Build tool & dev server (`npm run build` typechecks with tsc) |
+| **Three.js** + **GSAP** | WebGL landing page |
+| **Lucide React** | Icons |
+| **Vanilla CSS** | Glass-morphism design system |
 
 ### Backend
 
 | Technology | Purpose |
 |------------|---------|
-| **Python 3.11** | Runtime |
-| **FastAPI** + **Uvicorn** | Async REST API |
-| **PyTorch** + **Transformers** | Deep learning inference |
-| **InsightFace** | ArcFace face embedding |
-| **ultralytics** (YOLOv8) | Person detection |
-| **torchreid** (OSNet) | Body re-identification |
-| **pyiqa** (NIMA) | Aesthetic quality scoring |
-| **MediaPipe** | FaceMesh landmark detection |
-| **scikit-learn** | HDBSCAN, AgglomerativeClustering, silhouette analysis |
-| **OpenCV** + **NumPy** | Image processing |
-
-### Infrastructure
-
-| Component | Detail |
-|-----------|--------|
-| **Frontend container** | Node 20 build → nginx:alpine (port 8080) |
-| **Backend container** | python:3.11-slim (port 8000) |
-| **Deployment** | Railway (automatic Docker detection) |
-| **Job system** | Per-request UUID jobs — threaded background processing with live progress callbacks |
-
----
-
-## Data Pipeline Architecture
-
-```
-Input Photos (≤ 80 images, resized to max 1280 px)
-    │
-    ├──[PARALLEL]──────────────────────────────────────────┐
-    │                                                      │
-    ▼                     ▼                                ▼
-Face Detection       Person Detection            Scene Embedding
-(InsightFace/ArcFace) (YOLOv8 Nano)            (DINOv2 ViT-S/14)
-512-d face embeds     bounding boxes            scene-level vectors
-+ quality signals     + crops                   (normalized)
-    │                     │
-    ▼                     ▼
-    └──── Body Re-ID (OSNet) ──┘
-          512-d body embeddings
-                │
-                ▼
-        Identity Clustering (HDBSCAN)
-        face embeds (primary) + body embeds (fallback)
-                │
-    ┌───────────┴───────────┐
-    ▼                       ▼
-Event Clustering        Aesthetic Scoring
-(Agglomerative +        (NIMA)
- Silhouette sweep)      0–10 quality score
-    │                       │
-    └───────────┬───────────┘
-                ▼
-    Multi-Signal Scoring (7 signals, weighted sum)
-                ▼
-    Best Image Selection (top-1 per event × identity)
-                ▼
-    Smart Gallery — Events · Identities · Score Breakdown
-```
-
----
-
-## Research & Development Notebooks
-
-The `backend/` directory contains Jupyter notebooks documenting the full ML research and development process — from baseline experiments through to the final tuned pipeline.
-
-> **Final pipeline notebook:** [`Lumina_fine_tuned_eventbased_aggloreid_weighted_final.ipynb`](backend/Lumina_fine_tuned_eventbased_aggloreid_weighted_final.ipynb)
->
-> This notebook covers the complete end-to-end pipeline with fine-tuned event-based clustering, agglomerative re-ID, and weighted multi-signal scoring. Refer to it for a detailed walkthrough of model choices, hyperparameter tuning, ablation experiments, and qualitative results.
+| **Python 3.11**, **FastAPI** + **Uvicorn** | Async REST API |
+| **PyTorch** + **Transformers** | DINO + CLIP inference |
+| **InsightFace / ultralytics / torchreid / pyiqa / MediaPipe** | Task models |
+| **scikit-learn / hdbscan** | Clustering + silhouette analysis |
+| **SQLite** (stdlib) | Persistence + embedding cache |
+| **ReportLab + Pillow** | Themed PDF album rendering |
+| **OpenRouter** | Image editing (enhance) + text (album titles) |
+| **pytest** | Test suite |
 
 ---
 
@@ -223,82 +240,88 @@ The `backend/` directory contains Jupyter notebooks documenting the full ML rese
 
 ### Prerequisites
 
-- **Node.js 18+**
-- **Python 3.11+**
-- Google OAuth credentials (Client ID + API Key) for Drive integration *(optional — local upload works without it)*
+- **Node.js 18+**, **Python 3.11+**
+- An [OpenRouter](https://openrouter.ai) API key *(optional — only the AI enhance
+  button and AI album titles need it; everything else runs locally)*
 
 ### Local Development
 
 ```bash
-# Clone the repository
-git clone <repository>
-cd lumina
-
-# ── Frontend setup ──
+# ── Frontend ──
 cd frontend
 npm install
 
-# ── Backend setup ──
+# ── Backend ──
 cd ../backend
 python -m venv ../venv
 ../venv/Scripts/activate      # Windows
 pip install -r requirements.txt
 
-# ── Run both servers ──
-# Option A: one-command launcher (Windows)
-cd ..
-./start.ps1
+# ── Run both (Windows) ──
+cd .. && ./start.ps1
+# or manually:
+#   backend:  cd backend && uvicorn server:app --reload    → http://127.0.0.1:8000
+#   frontend: cd frontend && npm run dev                   → http://localhost:5173
+```
 
-# Option B: manual
-# Terminal 1 — Backend
-cd backend && uvicorn server:app --reload   # http://127.0.0.1:8000
+### Tests & Evaluation
 
-# Terminal 2 — Frontend
-cd frontend && npm run dev                 # http://localhost:5173
+```bash
+cd backend
+../venv/Scripts/python.exe -m pytest tests -q          # full suite (105 tests)
+../venv/Scripts/python.exe eval/eval_preferences.py    # synthetic preference convergence
+# labeled-data evals: see backend/eval/README.md
 ```
 
 ### Environment Variables
 
-Create `frontend/.env.local`:
+`frontend/.env.local`:
 
 ```env
 VITE_BACKEND_URL=http://127.0.0.1:8000
-VITE_GOOGLE_CLIENT_ID=your_google_client_id
-VITE_GOOGLE_API_KEY=your_google_api_key
+# VITE_API_KEY=shared-secret            # only if the backend sets LUMINA_API_KEY
 ```
 
-Create `backend/.env`:
+`backend/.env`:
 
 ```env
 FRONTEND_URL=http://localhost:5173
+
+# OpenRouter — powers AI enhancement and AI album titles. Without a key those
+# two features are disabled and everything else works unchanged.
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_TEXT_MODEL=openai/gpt-5.6-luna
+OPENROUTER_IMAGE_MODEL=google/gemini-3.1-flash-image
+
+# LUMINA_API_KEY=shared-secret          # enable API auth (recommended for public deploys)
+# JOB_TTL_HOURS=24                      # session/photo retention
+# MAX_PHOTOS=300                        # server-side per-job cap
 ```
+
+> **Choosing the image model.** The edit model must *retouch* the photo, not
+> regenerate it. Measured on the same input and prompt: `google/gemini-3.1-flash-image`
+> preserved framing, aspect ratio and identity for ~$0.07/photo, while
+> `openai/gpt-5.4-image-2` re-framed 16:9 → 1:1, re-posed the subjects and changed
+> the background, for ~$0.23. Swap models via `OPENROUTER_IMAGE_MODEL`, but verify
+> the output is an edit rather than a re-imagining.
 
 ---
 
 ## Deployment (Railway)
 
-1. Connect your GitHub repository to [Railway](https://railway.app)
-2. Create **two services** — one pointing to `backend/`, one to `frontend/`
-3. Set environment variables in the Railway dashboard:
+1. Connect the GitHub repository to [Railway](https://railway.app)
+2. Create **two services** — one for `backend/`, one for `frontend/`
+3. Set env vars (`FRONTEND_URL` and `OPENROUTER_API_KEY` on the backend; `VITE_BACKEND_URL` on the frontend; `LUMINA_API_KEY`/`VITE_API_KEY` pair recommended)
+4. Push — Railway auto-detects each `Dockerfile`
+5. Verify: `GET https://your-backend.railway.app/api/health` → `{"status": "ok"}`
 
-**Backend service:**
-```
-FRONTEND_URL=https://your-frontend.railway.app
-```
+> Note: SQLite persistence lives on the container filesystem — attach a Railway volume at `backend/` (or accept that sessions reset on redeploys).
 
-**Frontend service:**
-```
-VITE_BACKEND_URL=https://your-backend.railway.app
-VITE_GOOGLE_CLIENT_ID=your_google_client_id
-VITE_GOOGLE_API_KEY=your_google_api_key
-```
+---
 
-4. Push code to GitHub — Railway automatically detects each `Dockerfile` and deploys
-5. Verify deployment: `GET https://your-backend.railway.app/api/health` → `{"status": "ok"}`
+## Research & Development Notebooks
 
-**Configuration files:**
-- `backend/Dockerfile` — Python 3.11-slim with OpenCV, InsightFace, MediaPipe, and PyTorch dependencies
-- `frontend/Dockerfile` — Multi-stage Node 20 build → nginx:alpine static hosting
-- `*/railway.toml` — Railway-specific service configuration
-
-
+> **Final pipeline notebook:** [`Lumina_fine_tuned_eventbased_aggloreid_weighted_final.ipynb`](backend/Lumina_fine_tuned_eventbased_aggloreid_weighted_final.ipynb)
+>
+> Covers the Semester-1 pipeline development: model choices, hyperparameter tuning, ablation experiments, and qualitative results. The Semester-2 (capstone) additions — embedding fusion, per-person selection, MMR, explanations, CLIP search/naming, preference learning, persistence, and the evaluation harness — live in `backend/` with tests in `backend/tests/` and evaluation scripts in `backend/eval/`.
