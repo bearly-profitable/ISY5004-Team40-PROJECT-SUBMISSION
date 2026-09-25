@@ -8,6 +8,7 @@ import {
   applyCorrection,
   deleteEnhanced,
   downloadCollage,
+  fetchAlbumPlan,
   enhancePhoto,
   enhancedPhotoUrl,
   exportAlbum,
@@ -18,7 +19,10 @@ import {
   searchPhotos,
   submitFeedback,
 } from '../lib/analysisApi';
-import type { CollageTheme, EnhanceStyle } from '../lib/analysisApi';
+import type {
+  AlbumPlan, CharacterBody, CollageOptions, CollageTheme, EnhanceStyle,
+} from '../lib/analysisApi';
+import AlbumViewer from '../components/AlbumViewer';
 import {
   Sparkles,
   Trash2,
@@ -48,6 +52,7 @@ import {
   Pin,
   ScanFace,
   FileText,
+  BookOpen,
   Undo2,
 } from 'lucide-react';
 
@@ -85,6 +90,59 @@ const EnhanceContext = React.createContext<EnhanceContextValue>({
 });
 
 const useEnhance = () => React.useContext(EnhanceContext);
+
+/** Albums use the balanced MMR picks: quality with enough variety to fill a page. */
+const ALBUM_MMR_MODE: MmrMode = 'balanced';
+
+/** Mirrors backend/xiaohei.py BODIES, for when the themes fetch fails. */
+const FALLBACK_CHARACTER_BODIES: CharacterBody[] = [
+  { key: 'bean', name: 'Bean' },
+  { key: 'cylinder', name: 'Cylinder' },
+  { key: 'box', name: 'Box' },
+  { key: 'funnel', name: 'Funnel' },
+  { key: 'shadow', name: 'Shadow' },
+];
+
+/** Mirrors backend/collage.py THEMES so the picker and the viewer still work
+ *  if the fetch fails. Keep in step with the server; it is the source. */
+const FALLBACK_COLLAGE_THEMES: CollageTheme[] = [
+  {
+    key: 'midnight', name: 'Midnight', dark: true, serif: true,
+    swatch: ['#141824', '#d8b26a', '#f4f6fb'],
+    bgTop: '#141824', bgBottom: '#070910', ink: '#f4f6fb', muted: '#8b95ac',
+    accent: '#d8b26a', frame: '#2b3243', grain: 0.5, shadowAlpha: 0.4, flat: false,
+  },
+  {
+    key: 'ivory', name: 'Ivory', dark: false, serif: true,
+    swatch: ['#fcfaf7', '#b0814f', '#1b1a18'],
+    bgTop: '#fcfaf7', bgBottom: '#efe9df', ink: '#1b1a18', muted: '#8c8478',
+    accent: '#b0814f', frame: '#e2dacd', grain: 0.2, shadowAlpha: 0.16, flat: false,
+  },
+  {
+    key: 'blush', name: 'Blush', dark: false, serif: false,
+    swatch: ['#fdf3f2', '#d97b8c', '#40282d'],
+    bgTop: '#fdf3f2', bgBottom: '#f6dfe4', ink: '#40282d', muted: '#a57883',
+    accent: '#d97b8c', frame: '#f1d1d7', grain: 0.16, shadowAlpha: 0.16, flat: false,
+  },
+  {
+    key: 'mono', name: 'Mono', dark: false, serif: false,
+    swatch: ['#ffffff', '#0a0a0a', '#0a0a0a'],
+    bgTop: '#ffffff', bgBottom: '#f1f1f1', ink: '#0a0a0a', muted: '#8c8c8c',
+    accent: '#0a0a0a', frame: '#dddddd', grain: 0, shadowAlpha: 0.16, flat: false,
+  },
+  {
+    key: 'forest', name: 'Forest', dark: true, serif: true,
+    swatch: ['#16211c', '#9dc4a3', '#eef4ef'],
+    bgTop: '#16211c', bgBottom: '#080e0b', ink: '#eef4ef', muted: '#87a094',
+    accent: '#9dc4a3', frame: '#26362d', grain: 0.42, shadowAlpha: 0.4, flat: false,
+  },
+  {
+    key: 'paper', name: 'Paper', dark: false, serif: false,
+    swatch: ['#ffffff', '#e2542c', '#141414'],
+    bgTop: '#ffffff', bgBottom: '#ffffff', ink: '#141414', muted: '#9a9a9a',
+    accent: '#e2542c', frame: '#141414', grain: 0, shadowAlpha: 0, flat: true,
+  },
+];
 
 /* ------------------------------------------------
    useInView
@@ -305,18 +363,28 @@ const ManageDropdown: React.FC<ManageDropdownProps> = ({
   photoCount, onRename, onDownloadAll, onDelete, onClose,
 }) => {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on an outside click without rendering an overlay: an overlay would
+  // have to sit above the menu to catch the click, and then it catches the
+  // clicks meant for the menu too.
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) onClose();
+    };
+    const onEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onEscape);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onEscape);
+    };
+  }, [onClose]);
 
   return (
     <>
-      {createPortal(
-        <div
-          className="fixed inset-0 z-40 bg-white/[0.04] backdrop-blur-sm backdrop-saturate-150"
-          onClick={onClose}
-          aria-hidden
-        />,
-        document.body,
-      )}
       <div
+        ref={menuRef}
         className="absolute right-0 top-full mt-2 w-56 z-50"
         style={{ animation: 'scaleIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1) both', transformOrigin: 'top right' }}
         onClick={(e) => e.stopPropagation()}
@@ -644,299 +712,6 @@ const BestPerPersonStrip: React.FC<BestPerPersonStripProps> = ({ picks, identiti
 };
 
 /* ------------------------------------------------
-   Best Shot Card (used inside BestShotsGallery)
-   ------------------------------------------------ */
-interface BestShotCardProps {
-  photo: Photo;
-  event: Event;
-  nimaScore: number;
-  persons: Identity[];
-  index: number;
-  isTop: boolean;
-  faceBox?: FaceBox | null;
-  onOpen?: () => void;
-}
-
-const BestShotCard: React.FC<BestShotCardProps> = ({ photo, event, nimaScore, persons, index, isTop, faceBox, onOpen }) => {
-  const [loaded, setLoaded] = useState(false);
-  const [aspect, setAspect] = useState<number | null>(null);
-  const enh = useEnhance();
-
-  const entry = enh.entries[photo.id];
-  const busy = Boolean(enh.pending[photo.id]);
-  const viewingOriginal = Boolean(enh.showOriginal[photo.id]);
-  const displayUrl = entry && !viewingOriginal ? entry.url : photo.url;
-
-  // Vary card sizes for a masonry-like feel
-  const isHero = index === 0;
-  const isTall = !isHero && index % 5 === 2;
-  const isWide = !isHero && !isTall && index % 7 === 4;
-
-  const sizeClasses = [
-    isHero ? 'md:col-span-2 md:row-span-2' : '',
-    isTall ? 'row-span-2' : '',
-    isWide ? 'md:col-span-2' : '',
-  ].filter(Boolean).join(' ');
-
-  return (
-    <div
-      className={`gallery-card relative overflow-hidden rounded-2xl cursor-zoom-in group ${sizeClasses}`}
-      style={{ animation: `galleryCardIn 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) ${Math.min(index * 55, 650)}ms both` }}
-      onClick={onOpen}
-    >
-      {/* Skeleton under the image — cannot get stuck on a lost load event */}
-      <div className="absolute inset-0 skeleton" />
-
-      {/* Photo — the AI-enhanced version once one exists, unless comparing */}
-      <img
-        key={displayUrl}
-        src={displayUrl}
-        alt={photo.name}
-        className="relative w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.07]"
-        loading="lazy"
-        onLoad={(e) => {
-          setLoaded(true);
-          if (e.currentTarget.naturalHeight > 0) {
-            setAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight);
-          }
-        }}
-        onError={() => setLoaded(true)}
-      />
-
-      {faceBox && loaded && <FaceRing bbox={faceBox} imageAspect={aspect} />}
-
-      {/* Gradient overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent pointer-events-none" />
-      {/* Top vignette */}
-      <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/30 to-transparent pointer-events-none" />
-
-      {/* Top-left badges */}
-      <div
-        className="absolute top-3 left-3 flex items-center gap-1.5"
-        style={{ animation: `showcaseBadgePop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) ${Math.min(index * 55 + 200, 800)}ms both` }}
-      >
-        <div className="flex items-center gap-1 bg-black/50 backdrop-blur-md rounded-lg px-2 py-1">
-          {isTop ? <Award className="w-3 h-3 text-amber-400" /> : <Sparkles className="w-3 h-3 text-lumina-300" />}
-          <span className="text-[9px] font-bold text-white uppercase tracking-widest leading-none">{isTop ? 'Best' : 'Pick'}</span>
-        </div>
-        {nimaScore > 0 && (
-          <div className={`px-2 py-1 rounded-lg backdrop-blur-md text-[9px] font-bold text-white leading-none ${nimaScore >= 6 ? 'bg-green-500/70' : nimaScore >= 4.5 ? 'bg-yellow-500/70' : 'bg-red-500/70'}`}>
-            {nimaScore.toFixed(1)}
-          </div>
-        )}
-        {entry && (
-          <div
-            className="flex items-center gap-1 bg-lumina-500/80 backdrop-blur-md rounded-lg px-2 py-1"
-            title={
-              entry.identityScore != null
-                ? `Identity verified — ${(entry.identityScore * 100).toFixed(0)}% match to the original face`
-                : 'AI enhanced'
-            }
-          >
-            <Wand2 className="w-3 h-3 text-white" />
-            <span className="text-[9px] font-bold text-white uppercase tracking-widest leading-none">
-              {viewingOriginal ? 'Original' : 'Enhanced'}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Working overlay */}
-      {busy && (
-        <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 pointer-events-none">
-          <Loader2 className="w-6 h-6 text-white animate-spin" />
-          <span className="text-[10px] font-bold text-white uppercase tracking-widest">Enhancing</span>
-          <span className="text-[9px] text-white/60">this takes ~30s</span>
-        </div>
-      )}
-
-      {/* Top-right actions — appear on hover */}
-      <div className="absolute top-3 right-3 z-30 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 translate-y-1 group-hover:translate-y-0 transition-all duration-300">
-        {enh.enabled && !entry && (
-          <button
-            onClick={(e) => { e.stopPropagation(); enh.enhance(photo.id); }}
-            disabled={busy}
-            className="h-8 px-2.5 rounded-full bg-lumina-500/85 backdrop-blur-md border border-white/30 flex items-center gap-1.5 text-white hover:bg-lumina-500 transition-colors duration-200 disabled:opacity-50"
-            title="AI enhance this photo (identity-checked)"
-          >
-            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-            <span className="text-[9px] font-bold uppercase tracking-widest leading-none">Enhance</span>
-          </button>
-        )}
-        {entry && (
-          <>
-            <button
-              onClick={(e) => { e.stopPropagation(); enh.toggleOriginal(photo.id); }}
-              className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white hover:bg-white/40 transition-colors duration-200"
-              title={viewingOriginal ? 'Show enhanced' : 'Hold on the original to compare'}
-            >
-              <ScanFace className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); enh.revert(photo.id); }}
-              className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white hover:bg-red-500/60 transition-colors duration-200"
-              title="Discard the enhancement"
-            >
-              <Undo2 className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            downloadPhoto(entry && !viewingOriginal ? { ...photo, url: entry.url } : photo, index);
-          }}
-          className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white hover:bg-white/40 transition-colors duration-200"
-          title="Download"
-        >
-          <Download className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
-      {/* Bottom info */}
-      <div className="absolute bottom-0 left-0 right-0 p-3 translate-y-1 group-hover:translate-y-0 transition-transform duration-400">
-        <div className="flex items-end justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-white text-xs font-semibold truncate leading-tight drop-shadow-sm">{event.label}</p>
-            <p className="text-white/55 text-[10px] mt-0.5 leading-none">{event.photos.length} {event.photos.length === 1 ? 'photo' : 'photos'}</p>
-          </div>
-          {/* Person face stack */}
-          {persons.length > 0 && (
-            <div className="flex items-center -space-x-1.5 flex-shrink-0">
-              {persons.slice(0, 3).map((p) => (
-                <div key={p.id} className="w-5 h-5 rounded-full ring-1 ring-white/50 overflow-hidden flex-shrink-0" title={p.label}>
-                  {p.faceThumb
-                    ? <img src={p.faceThumb} alt={p.label} className="w-full h-full object-cover" />
-                    : <div className="w-full h-full bg-lumina-400/80 flex items-center justify-center"><User className="w-2.5 h-2.5 text-white" /></div>
-                  }
-                </div>
-              ))}
-              {persons.length > 3 && (
-                <div className="w-5 h-5 rounded-full ring-1 ring-white/50 bg-black/40 backdrop-blur-sm flex items-center justify-center text-[8px] font-bold text-white">
-                  +{persons.length - 3}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-/* ------------------------------------------------
-   Best Shots Gallery (showcase view with MMR modes)
-   ------------------------------------------------ */
-const MMR_MODE_UI: Array<{ mode: MmrMode; label: string; hint: string }> = [
-  { mode: 'safe', label: 'Quality', hint: 'Highest scores only' },
-  { mode: 'balanced', label: 'Balanced', hint: 'Quality with variety' },
-  { mode: 'diverse', label: 'Diverse', hint: 'Maximum variety (MMR)' },
-];
-
-interface BestShotsGalleryProps {
-  events: Event[];
-  identities: Identity[];
-  mmrMode: MmrMode;
-  onMmrModeChange: (mode: MmrMode) => void;
-  highlightPerson?: Identity | null;
-  onOpenItems: (items: LightboxItem[], index: number) => void;
-}
-
-const BestShotsGallery: React.FC<BestShotsGalleryProps> = ({ events, identities, mmrMode, onMmrModeChange, highlightPerson, onOpenItems }) => {
-  const items: Array<{ photo: Photo; event: Event; nimaScore: number; persons: Identity[]; isTop: boolean; faceBox?: FaceBox | null }> = [];
-
-  for (const event of events) {
-    const photoById = new Map<string, Photo>(event.photos.map((p) => [p.id, p]));
-    // MMR picks for this mode; fall back to the single top shot
-    const pickIds = event.mmrPicks?.[mmrMode]?.length
-      ? event.mmrPicks[mmrMode]!
-      : [event.topPhotoId];
-    const persons = identities.filter((ident) => event.persons.includes(ident.id));
-    for (const photoId of pickIds) {
-      const photo = photoById.get(photoId) ?? null;
-      if (!photo) continue;
-      const nimaScore = event.members.find((m) => m.photoId === photoId)?.nimaScore ?? 0;
-      items.push({
-        photo, event, nimaScore, persons,
-        isTop: photoId === event.topPhotoId,
-        faceBox: highlightPerson?.faceBoxes?.[photoId] ?? null,
-      });
-    }
-  }
-
-  if (items.length === 0) return null;
-
-  return (
-    <div style={{ animation: 'showcaseReveal 0.55s cubic-bezier(0.4, 0, 0.2, 1) both' }}>
-      {/* Showcase header */}
-      <div className="flex flex-col items-center text-center gap-3 mb-8">
-        <div
-          className="inline-flex items-center gap-2.5 px-5 py-2 rounded-full liquid-glass glass-prismatic"
-          style={{ animation: 'showcaseBadgePop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 100ms both' }}
-        >
-          <Sparkles className="w-3.5 h-3.5 text-lumina-500 anim-breathe" />
-          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-lumina-600">Showcase Mode</span>
-          <Sparkles className="w-3.5 h-3.5 text-lumina-500 anim-breathe" style={{ animationDelay: '0.5s' }} />
-        </div>
-
-        <h3
-          className="text-3xl sm:text-4xl font-semibold tracking-tight text-gradient"
-          style={{ animation: 'fadeInUp 0.6s var(--smooth) 150ms both' }}
-        >
-          Your Best Shots
-        </h3>
-        <p
-          className="text-slate-400 text-sm tracking-wide"
-          style={{ animation: 'fadeInUp 0.6s var(--smooth) 220ms both' }}
-        >
-          {items.length} curated {items.length === 1 ? 'pick' : 'picks'} from {events.length} {events.length === 1 ? 'event' : 'events'}
-        </p>
-
-        {/* MMR mode segmented control */}
-        <div
-          className="liquid-glass rounded-full p-1 flex items-center gap-0.5"
-          style={{ animation: 'fadeInUp 0.6s var(--smooth) 280ms both' }}
-        >
-          {MMR_MODE_UI.map(({ mode, label, hint }) => (
-            <button
-              key={mode}
-              onClick={() => onMmrModeChange(mode)}
-              title={hint}
-              className={`px-4 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-widest transition-all duration-300 ${
-                mmrMode === mode
-                  ? 'bg-lumina-500 text-white shadow-lg shadow-lumina-500/25'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="text-[11px] text-slate-400 tracking-wide -mt-1" style={{ animation: 'fadeInUp 0.6s var(--smooth) 320ms both' }}>
-          {MMR_MODE_UI.find((m) => m.mode === mmrMode)?.hint} · diversity-aware selection (Maximal Marginal Relevance)
-        </p>
-      </div>
-
-      {/* Masonry grid */}
-      <div
-        key={mmrMode}
-        className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4"
-        style={{ gridAutoRows: 'clamp(140px, 16vw, 230px)', gridAutoFlow: 'dense' }}
-      >
-        {items.map((item, i) => (
-          <BestShotCard
-            key={`${item.event.id}-${item.photo.id}`}
-            {...item}
-            index={i}
-            onOpen={() => onOpenItems(items.map((it) => ({ photo: it.photo, event: it.event })), i)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-};
-
-/* ------------------------------------------------
    NIMA Score Badge
    ------------------------------------------------ */
 const NimaBadge: React.FC<{ score: number }> = ({ score }) => {
@@ -964,7 +739,13 @@ interface EventRowProps {
 }
 
 const EventRow: React.FC<EventRowProps> = ({ event, identities, index, onDelete, onRename, onMakeBest, highlightPerson, onOpenPhoto }) => {
+  const enh = useEnhance();
   const topPhoto = event.photos.find((p) => p.id === event.topPhotoId) ?? event.photos[0];
+
+  const topEnhanced = topPhoto ? enh.entries[topPhoto.id] : undefined;
+  const topEnhanceBusy = Boolean(topPhoto && enh.pending[topPhoto.id]);
+  const topShowingOriginal = Boolean(topPhoto && enh.showOriginal[topPhoto.id]);
+  const topDisplayUrl = topEnhanced && !topShowingOriginal ? topEnhanced.url : topPhoto?.url;
   const otherPhotos = event.photos.filter((p) => p.id !== event.topPhotoId);
   const view = useInView(0.05);
 
@@ -1126,8 +907,8 @@ const EventRow: React.FC<EventRowProps> = ({ event, identities, index, onDelete,
                 dependency that could leave it stuck. */}
             <div className="absolute inset-0 skeleton" />
             <img
-              key={topPhoto.id}
-              src={topPhoto.url}
+              key={topDisplayUrl}
+              src={topDisplayUrl}
               alt="Best Pick"
               className="relative w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.03]"
               onLoad={(e) => {
@@ -1153,15 +934,71 @@ const EventRow: React.FC<EventRowProps> = ({ event, identities, index, onDelete,
                   <span className="text-[10px] font-bold uppercase tracking-widest text-white">Best Shot</span>
                 </>
               )}
+              {topEnhanced && (
+                <>
+                  <span className="w-px h-3 bg-white/25" />
+                  <Wand2 className="w-3 h-3 text-lumina-300" />
+                  <span
+                    className="text-[10px] font-bold uppercase tracking-widest text-white"
+                    title={topEnhanced.identityScore != null
+                      ? `Identity verified — ${(topEnhanced.identityScore * 100).toFixed(0)}% match to the original face`
+                      : 'AI enhanced'}
+                  >
+                    {topShowingOriginal ? 'Original' : 'Enhanced'}
+                  </span>
+                </>
+              )}
             </div>
             <NimaBadge score={nimaScore} />
             <div className="absolute top-4 right-4 w-9 h-9 rounded-full liquid-glass flex items-center justify-center">
               <Award className="w-4 h-4 text-white" />
             </div>
+            {topEnhanceBusy && (
+              <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 pointer-events-none">
+                <Loader2 className="w-7 h-7 text-white animate-spin" />
+                <span className="text-[11px] font-bold text-white uppercase tracking-widest">Enhancing</span>
+                <span className="text-[10px] text-white/60">this takes ~30s</span>
+              </div>
+            )}
             <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-all duration-400 pointer-events-none group-hover:pointer-events-auto">
               <div className="absolute bottom-4 right-4 flex items-center gap-2">
+                {enh.enabled && !topEnhanced && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); enh.enhance(topPhoto.id); }}
+                    disabled={topEnhanceBusy}
+                    className="h-11 px-4 rounded-full bg-lumina-500/90 backdrop-blur-md flex items-center gap-2 text-white transition-all duration-300 hover:scale-105 hover:bg-lumina-500 disabled:opacity-50"
+                    title="AI enhance this photo — the result is identity-checked before you see it"
+                  >
+                    {topEnhanceBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                    <span className="text-[10px] font-bold uppercase tracking-widest">Enhance</span>
+                  </button>
+                )}
+                {topEnhanced && (
+                  <>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); enh.toggleOriginal(topPhoto.id); }}
+                      className="w-11 h-11 rounded-full liquid-glass flex items-center justify-center text-white transition-all duration-300 hover:scale-110 hover:bg-white/20"
+                      title={topShowingOriginal ? 'Show the enhanced version' : 'Compare with the original'}
+                    >
+                      <ScanFace className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); enh.revert(topPhoto.id); }}
+                      className="w-11 h-11 rounded-full liquid-glass flex items-center justify-center text-white transition-all duration-300 hover:scale-110 hover:bg-red-500/40"
+                      title="Discard the enhancement"
+                    >
+                      <Undo2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); downloadPhoto(topPhoto, 0); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    downloadPhoto(
+                      topEnhanced && !topShowingOriginal ? { ...topPhoto, url: topEnhanced.url } : topPhoto,
+                      0,
+                    );
+                  }}
                   className="w-11 h-11 rounded-full liquid-glass flex items-center justify-center text-white transition-all duration-300 hover:scale-110 hover:bg-white/20"
                   title="Download"
                 >
@@ -1953,30 +1790,48 @@ const EventPillBar: React.FC<EventPillBarProps> = ({ events, selectedEvent, onSe
 /* ------------------------------------------------
    Collage panel (themed PDF album export)
    ------------------------------------------------ */
+type CollageChoiceSet = {
+  theme: string;
+  title: string;
+  autoTitle: boolean;
+  captions: boolean;
+  aiCaptions: boolean;
+  useEnhanced: boolean;
+  chapters: boolean;
+  cast: boolean;
+  character: boolean;
+  characterBody: string;
+};
+
 interface CollagePanelProps {
   photoCount: number;
   enhancedCount: number;
   busy: boolean;
-  onBuild: (options: {
-    theme: string;
-    title: string;
-    autoTitle: boolean;
-    captions: boolean;
-    useEnhanced: boolean;
-  }) => void;
+  previewBusy: boolean;
+  onBuild: (options: CollageChoiceSet) => void;
+  onPreview: (options: CollageChoiceSet) => void;
+  /** Hand the fetched palettes up so the viewer can restyle a plan locally. */
+  onThemesLoaded: (themes: CollageTheme[]) => void;
   onClose: () => void;
 }
 
 const CollagePanel: React.FC<CollagePanelProps> = ({
-  photoCount, enhancedCount, busy, onBuild, onClose,
+  photoCount, enhancedCount, busy, previewBusy, onBuild, onPreview, onThemesLoaded, onClose,
 }) => {
-  const [themes, setThemes] = useState<CollageTheme[]>([]);
+  const [themes, setThemes] = useState<CollageTheme[]>(FALLBACK_COLLAGE_THEMES);
   const [theme, setTheme] = useState('midnight');
+  const [themesLoading, setThemesLoading] = useState(true);
   const [aiAvailable, setAiAvailable] = useState(false);
   const [title, setTitle] = useState('');
   const [autoTitle, setAutoTitle] = useState(false);
   const [captions, setCaptions] = useState(true);
+  const [aiCaptions, setAiCaptions] = useState(false);
   const [useEnhanced, setUseEnhanced] = useState(true);
+  const [chapters, setChapters] = useState(true);
+  const [cast, setCast] = useState(true);
+  const [character, setCharacter] = useState(false);
+  const [characterBody, setCharacterBody] = useState('bean');
+  const [bodies, setBodies] = useState<CharacterBody[]>(FALLBACK_CHARACTER_BODIES);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1984,52 +1839,116 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
     getCollageThemes()
       .then((data) => {
         if (!alive) return;
-        setThemes(data.themes);
-        setTheme(data.default);
+        if (data.themes?.length) {
+          setThemes(data.themes);
+          setTheme(data.default || data.themes[0].key);
+          onThemesLoaded(data.themes);
+        }
+        if (data.characterBodies?.length) setBodies(data.characterBodies);
         setAiAvailable(data.aiTitles);
         setAutoTitle(data.aiTitles);
+        setAiCaptions(data.aiCaptions ?? data.aiTitles);
       })
-      .catch((err) => { if (alive) setLoadError(err instanceof Error ? err.message : 'Could not load themes.'); });
+      .catch((err) => {
+        // Keep the built-in themes on screen; only say the extras are off.
+        if (alive) {
+          setLoadError(
+            err instanceof Error
+              ? `Using built-in themes — ${err.message}`
+              : 'Using built-in themes — could not reach the server.',
+          );
+        }
+      })
+      .finally(() => { if (alive) setThemesLoading(false); });
     return () => { alive = false; };
   }, []);
+
+  const choices = (): CollageChoiceSet => ({
+    theme, title: title.trim(), autoTitle, captions, aiCaptions, useEnhanced,
+    chapters, cast, character, characterBody,
+  });
+
+  /** Paper exists for 小黑 — pure white, hairline rules, square corners — so
+   *  choosing it brings him along. Turning him back off is one tap. */
+  const pickTheme = (key: string) => {
+    setTheme(key);
+    if (key === 'paper') setCharacter(true);
+  };
+
+  const toggleRow = (
+    checked: boolean,
+    onChange: (v: boolean) => void,
+    label: string,
+    hint?: string,
+  ) => (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="w-full flex items-start gap-3 text-left group"
+    >
+      <span
+        className={`mt-0.5 w-8 h-[18px] rounded-full flex-shrink-0 relative transition-colors duration-300 ${
+          checked ? 'bg-lumina-500' : 'bg-slate-300'
+        }`}
+      >
+        <span
+          className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-all duration-300 ${
+            checked ? 'left-[16px]' : 'left-[2px]'
+          }`}
+        />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs font-medium text-slate-800 leading-tight">{label}</span>
+        {hint && <span className="block text-[10px] text-slate-500 leading-snug mt-0.5">{hint}</span>}
+      </span>
+    </button>
+  );
 
   return createPortal(
     <div
       className="fixed inset-0 z-[300] flex items-center justify-center p-4 sm:p-6"
       onClick={busy ? undefined : onClose}
-      style={{ background: 'rgba(30, 27, 60, 0.28)', backdropFilter: 'blur(6px)', animation: 'fadeInUp 0.2s ease both' }}
+      style={{
+        background: 'rgba(24, 22, 48, 0.32)',
+        backdropFilter: 'blur(10px) saturate(140%)',
+        animation: 'fadeInUp 0.22s ease both',
+      }}
     >
       <div
-        className="w-full max-w-md max-h-[86vh] flex flex-col rounded-3xl overflow-hidden shadow-2xl shadow-black/25 ring-1 ring-white/60"
+        className="w-full max-w-md max-h-[88vh] flex flex-col rounded-3xl overflow-hidden"
         style={{
-          background: 'linear-gradient(165deg, rgba(255,255,255,0.98) 0%, rgba(248,246,255,0.96) 100%)',
+          background: 'linear-gradient(168deg, #ffffff 0%, #f7f5fd 100%)',
+          boxShadow: '0 24px 70px rgba(20,18,48,0.30), 0 0 0 1px rgba(255,255,255,0.7)',
           animation: 'scaleInBounce 0.35s cubic-bezier(0.34,1.56,0.64,1) both',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-4 px-6 pt-6 pb-5">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-amber-500/25">
-            <FileText className="w-5 h-5 text-white" />
+        {/* Header */}
+        <div className="flex items-center gap-3.5 px-6 pt-6 pb-5">
+          <div className="w-10 h-10 rounded-2xl bg-lumina-500/12 flex items-center justify-center flex-shrink-0">
+            <FileText className="w-[18px] h-[18px] text-lumina-500" />
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-semibold tracking-tight text-slate-800">Photo Album PDF</h3>
-            <p className="text-[11px] text-slate-400 leading-snug">
-              {photoCount} {photoCount === 1 ? 'photo' : 'photos'} laid out as a designed, printable album.
+            <h3 className="text-base font-semibold tracking-tight text-slate-800 leading-tight">
+              Photo Album
+            </h3>
+            <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+              {photoCount} {photoCount === 1 ? 'photo' : 'photos'} · bento layout · A4 landscape
             </p>
           </div>
           <button
             onClick={onClose}
             disabled={busy}
-            className="w-9 h-9 rounded-full bg-slate-900/[0.04] flex items-center justify-center text-slate-400 hover:bg-slate-900/[0.08] hover:text-slate-700 transition-colors flex-shrink-0 disabled:opacity-40"
+            className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 hover:text-slate-800 transition-colors flex-shrink-0 disabled:opacity-40"
             title="Close"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+        <div className="h-px bg-slate-200" />
 
-        <div className="overflow-y-auto px-6 py-5 space-y-5">
+        <div className="overflow-y-auto px-6 py-5 space-y-6">
           {loadError && (
             <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-[11px] text-red-600">
               {loadError}
@@ -2038,29 +1957,36 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
 
           {/* Theme */}
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-2.5">Theme</p>
+            <div className="flex items-baseline justify-between mb-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                Theme
+              </p>
+              <span className="text-[10px] text-slate-400">
+                {themesLoading ? 'loading…' : `${themes.length} available`}
+              </span>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               {themes.map((t) => (
                 <button
                   key={t.key}
-                  onClick={() => setTheme(t.key)}
-                  className={`relative flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-all duration-200 ring-1 ${
+                  onClick={() => pickTheme(t.key)}
+                  className={`relative flex items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left border transition-all duration-200 ${
                     theme === t.key
-                      ? 'ring-lumina-500 bg-lumina-500/[0.07] shadow-sm'
-                      : 'ring-slate-200 hover:ring-slate-300 bg-white/60'
+                      ? 'border-lumina-500 bg-lumina-500/[0.08]'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
                   }`}
                 >
-                  <span className="flex -space-x-1.5 flex-shrink-0">
-                    {t.swatch.map((hex, i) => (
-                      <span
-                        key={i}
-                        className="w-4 h-4 rounded-full ring-1 ring-white"
-                        style={{ background: hex }}
-                      />
-                    ))}
+                  <span
+                    className="w-7 h-7 rounded-lg flex-shrink-0 border border-black/10 overflow-hidden flex"
+                    aria-hidden
+                  >
+                    <span className="flex-1" style={{ background: t.swatch[0] }} />
+                    <span className="w-[9px]" style={{ background: t.swatch[1] }} />
                   </span>
-                  <span className="text-xs font-medium text-slate-700 truncate">{t.name}</span>
-                  {theme === t.key && <Check className="w-3.5 h-3.5 text-lumina-500 ml-auto flex-shrink-0" />}
+                  <span className="text-xs font-medium text-slate-800 truncate flex-1">{t.name}</span>
+                  {theme === t.key && (
+                    <Check className="w-3.5 h-3.5 text-lumina-500 flex-shrink-0" />
+                  )}
                 </button>
               ))}
             </div>
@@ -2068,71 +1994,103 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
 
           {/* Title */}
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-2.5">Title</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 mb-3">
+              Title
+            </p>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               disabled={autoTitle}
               placeholder={autoTitle ? 'Named by AI from your events' : 'Summer at the Bay'}
-              className="glass-input rounded-xl py-2.5 px-3 w-full text-sm disabled:opacity-50"
+              className="glass-input rounded-xl py-2.5 px-3.5 w-full text-sm disabled:opacity-45"
             />
             {aiAvailable && (
-              <label className="flex items-center gap-2 mt-2.5 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={autoTitle}
-                  onChange={(e) => setAutoTitle(e.target.checked)}
-                  className="accent-lumina-500 w-3.5 h-3.5"
-                />
-                <span className="text-[11px] text-slate-500">
-                  Let AI name the album from your events and people
-                </span>
-              </label>
+              <div className="mt-3">
+                {toggleRow(autoTitle, setAutoTitle, 'Name the album with AI',
+                  'Uses your event labels and people — never invents places or dates')}
+              </div>
             )}
           </div>
 
-          {/* Options */}
-          <div className="space-y-2.5">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={captions}
-                onChange={(e) => setCaptions(e.target.checked)}
-                className="accent-lumina-500 w-3.5 h-3.5"
-              />
-              <span className="text-[11px] text-slate-500">Caption each photo with its event and people</span>
-            </label>
-            {enhancedCount > 0 && (
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={useEnhanced}
-                  onChange={(e) => setUseEnhanced(e.target.checked)}
-                  className="accent-lumina-500 w-3.5 h-3.5"
-                />
-                <span className="text-[11px] text-slate-500">
-                  Use the AI-enhanced version where one exists ({enhancedCount})
-                </span>
-              </label>
+          {/* Story */}
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 mb-3">
+              Story
+            </p>
+            <div className="space-y-3.5">
+              {toggleRow(chapters, setChapters, 'Chapter dividers',
+                'A title page for each event, so the album reads as a sequence')}
+              {toggleRow(cast, setCast, 'Cast page',
+                'Introduces the people your photos found, before the photos start')}
+              {toggleRow(character, setCharacter, 'Put 小黑 to work',
+                'A small character who carries the album between its chapters')}
+            </div>
+
+            {character && (
+              <div className="mt-4">
+                <p className="text-[10px] text-slate-500 mb-2">His silhouette</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {bodies.map((b) => (
+                    <button
+                      key={b.key}
+                      onClick={() => setCharacterBody(b.key)}
+                      className={`px-2.5 py-1.5 rounded-xl text-[11px] font-medium border transition-all duration-200 ${
+                        characterBody === b.key
+                          ? 'border-lumina-500 bg-lumina-500/[0.08] text-slate-800'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      {b.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
+          </div>
+
+          {/* Labels & options */}
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 mb-3">
+              Labels
+            </p>
+            <div className="space-y-3.5">
+              {toggleRow(captions, setCaptions, 'Caption each photo',
+                'Set beneath the photo, never over it')}
+              {captions && aiAvailable &&
+                toggleRow(aiCaptions, setAiCaptions, 'Write captions with AI',
+                  'A short title per photo instead of the event name')}
+              {enhancedCount > 0 &&
+                toggleRow(useEnhanced, setUseEnhanced, 'Use enhanced versions',
+                  `${enhancedCount} ${enhancedCount === 1 ? 'photo has' : 'photos have'} an AI edit`)}
+            </div>
           </div>
         </div>
 
-        <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+        <div className="h-px bg-slate-200" />
 
-        <div className="px-6 py-4">
+        <div className="px-6 py-5 space-y-2.5">
           <button
-            onClick={() => onBuild({ theme, title: title.trim(), autoTitle, captions, useEnhanced })}
-            disabled={busy || photoCount === 0}
-            className="w-full flex items-center justify-center gap-2 bg-lumina-600 text-white px-5 py-3 rounded-xl text-xs font-bold uppercase tracking-[0.14em] hover:bg-lumina-700 disabled:opacity-40 transition-all duration-300"
+            onClick={() => onPreview(choices())}
+            disabled={busy || previewBusy || photoCount === 0}
+            className="w-full flex items-center justify-center gap-2 bg-lumina-600 text-white px-5 py-3 rounded-2xl text-[11px] font-bold uppercase tracking-[0.14em] hover:bg-lumina-700 disabled:opacity-40 transition-all duration-300"
+          >
+            {previewBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
+            {previewBusy ? 'Laying it out…' : 'Open the album'}
+          </button>
+          <button
+            onClick={() => onBuild(choices())}
+            disabled={busy || previewBusy || photoCount === 0}
+            className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl text-[11px] font-bold uppercase tracking-[0.14em] text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 transition-all duration-300"
           >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
             {busy ? 'Designing album…' : 'Download PDF'}
           </button>
-          <p className="text-[10px] text-slate-400 text-center mt-2.5 leading-snug">
-            A4 landscape · cover page · varied mosaic layouts
-          </p>
+          {busy && aiCaptions && (
+            <p className="text-[11px] text-slate-500 text-center mt-3">
+              Writing captions for {photoCount} {photoCount === 1 ? 'photo' : 'photos'}…
+            </p>
+          )}
         </div>
       </div>
     </div>,
@@ -2160,8 +2118,6 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
 }) => {
   const [events, setEvents] = useState<Event[]>(initialEvents);
   const [identities, setIdentities] = useState<Identity[]>(initialIdentities);
-  const [hideClutter, setHideClutter] = useState(false);
-  const [mmrMode, setMmrMode] = useState<MmrMode>('balanced');
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [peopleManagerOpen, setPeopleManagerOpen] = useState(false);
@@ -2170,6 +2126,13 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   const [exporting, setExporting] = useState(false);
   const [collageOpen, setCollageOpen] = useState(false);
   const [collageBusy, setCollageBusy] = useState(false);
+  /** The album currently open in the flip-book, with the request that built it
+   *  so the PDF button in the viewer exports exactly what is on screen. */
+  const [albumPlan, setAlbumPlan] = useState<AlbumPlan | null>(null);
+  const [albumOptions, setAlbumOptions] = useState<CollageOptions | null>(null);
+  const [albumTheme, setAlbumTheme] = useState('midnight');
+  const [collageThemes, setCollageThemes] = useState<CollageTheme[]>(FALLBACK_COLLAGE_THEMES);
+  const [planBusy, setPlanBusy] = useState(false);
   const [enhanceEntries, setEnhanceEntries] = useState<Record<string, EnhanceEntry>>({});
   const [enhancePending, setEnhancePending] = useState<Record<string, boolean>>({});
   const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
@@ -2425,63 +2388,96 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
 
   /* ---- Collage ---- */
 
-  /** The photos currently on screen: MMR picks in showcase mode, else best-per-event. */
+  /** What goes in the album: each event's diversity-aware picks, else its best shot. */
   const curatedPhotoIds = useCallback((): string[] => {
     const filtered = events
       .filter((e) => !selectedPerson || e.persons.includes(selectedPerson))
       .filter((e) => !selectedEvent || e.id === selectedEvent);
     const ids = new Set<string>();
     for (const evt of filtered) {
-      if (hideClutter && evt.mmrPicks?.[mmrMode]?.length) {
-        evt.mmrPicks[mmrMode]!.forEach((id) => ids.add(id));
+      const picks = evt.mmrPicks?.[ALBUM_MMR_MODE];
+      if (picks?.length) {
+        picks.forEach((id) => ids.add(id));
       } else {
         ids.add(evt.topPhotoId);
       }
     }
     return [...ids];
-  }, [events, selectedPerson, selectedEvent, hideClutter, mmrMode]);
+  }, [events, selectedPerson, selectedEvent]);
 
-  const handleBuildCollage = useCallback(async (options: {
-    theme: string; title: string; autoTitle: boolean; captions: boolean; useEnhanced: boolean;
-  }) => {
+  type CollageChoices = CollageChoiceSet;
+
+  /** Resolve the panel's choices into a request, or explain why we cannot. */
+  const collageRequest = useCallback((choices: CollageChoices): CollageOptions | null => {
     if (!jobId) {
       notify('An album requires a saved session.', 'error');
-      return;
+      return null;
     }
     const photoIds = curatedPhotoIds();
     if (photoIds.length === 0) {
       notify('Nothing to put in the album.', 'error');
-      return;
+      return null;
     }
+    return { photoIds, ...choices };
+  }, [jobId, curatedPhotoIds, notify]);
+
+  const handleBuildCollage = useCallback(async (choices: CollageChoices) => {
+    const options = collageRequest(choices);
+    if (!options || !jobId) return;
+
     setCollageBusy(true);
     try {
-      await downloadCollage(jobId, { photoIds, ...options });
-      notify(`Album ready — ${photoIds.length} ${photoIds.length === 1 ? 'photo' : 'photos'}.`);
+      await downloadCollage(jobId, options);
+      const n = options.photoIds.length;
+      notify(`Album ready — ${n} ${n === 1 ? 'photo' : 'photos'}.`);
       setCollageOpen(false);
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Album export failed.', 'error');
     } finally {
       setCollageBusy(false);
     }
-  }, [jobId, curatedPhotoIds, notify]);
+  }, [jobId, collageRequest, notify]);
+
+  /** Open the flip-book. The plan is the same layout the PDF renders, so this
+   *  is a real preview rather than an approximation of one. */
+  const handlePreviewAlbum = useCallback(async (choices: CollageChoices) => {
+    const options = collageRequest(choices);
+    if (!options || !jobId) return;
+
+    setPlanBusy(true);
+    try {
+      const plan = await fetchAlbumPlan(jobId, options);
+      setAlbumPlan(plan);
+      setAlbumOptions(options);
+      setAlbumTheme(plan.theme.key);
+      setCollageOpen(false);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not build the preview.', 'error');
+    } finally {
+      setPlanBusy(false);
+    }
+  }, [jobId, collageRequest, notify]);
+
+  /** Export straight from the viewer, honouring a theme switched in there. */
+  const handleDownloadFromViewer = useCallback(async () => {
+    if (!jobId || !albumOptions) return;
+    setCollageBusy(true);
+    try {
+      await downloadCollage(jobId, { ...albumOptions, theme: albumTheme });
+      notify('Album downloaded.');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Album export failed.', 'error');
+    } finally {
+      setCollageBusy(false);
+    }
+  }, [jobId, albumOptions, albumTheme, notify]);
 
   const handleExport = useCallback(async () => {
     if (!jobId) {
       notify('Export requires a saved session.', 'error');
       return;
     }
-    // Export what's on screen: MMR picks in showcase mode, otherwise the best shot per event
-    const filtered = events
-      .filter((e) => !selectedPerson || e.persons.includes(selectedPerson))
-      .filter((e) => !selectedEvent || e.id === selectedEvent);
-    const ids = new Set<string>();
-    for (const evt of filtered) {
-      if (hideClutter && evt.mmrPicks?.[mmrMode]?.length) {
-        evt.mmrPicks[mmrMode]!.forEach((id) => ids.add(id));
-      } else {
-        ids.add(evt.topPhotoId);
-      }
-    }
+    const ids = new Set<string>(curatedPhotoIds());
     if (ids.size === 0) {
       notify('Nothing to export.', 'error');
       return;
@@ -2495,7 +2491,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     } finally {
       setExporting(false);
     }
-  }, [jobId, events, selectedPerson, selectedEvent, hideClutter, mmrMode, notify]);
+  }, [jobId, curatedPhotoIds, notify]);
 
   /* ---- derived view state ---- */
 
@@ -2582,17 +2578,6 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             />
           )}
 
-          {/* PDF album */}
-          <button
-            onClick={() => setCollageOpen(true)}
-            disabled={!jobId}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-full liquid-glass glass-prismatic-soft text-[11px] font-bold uppercase tracking-[0.14em] text-slate-600 hover:text-slate-900 transition-all duration-300 disabled:opacity-40"
-            title={jobId ? 'Build a themed PDF album from these picks' : 'An album requires a saved session'}
-          >
-            <FileText className="w-3.5 h-3.5 text-amber-500" />
-            Album
-          </button>
-
           {/* Export */}
           <button
             onClick={handleExport}
@@ -2607,7 +2592,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
           {/* Rejects bin */}
           {rejects.length > 0 && (
             <button
-              onClick={() => { setRejectsOpen((v) => !v); setHideClutter(false); }}
+              onClick={() => setRejectsOpen((v) => !v)}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-[11px] font-bold uppercase tracking-[0.14em] transition-all duration-300 ${
                 rejectsOpen
                   ? 'bg-red-500 text-white shadow-lg shadow-red-500/25'
@@ -2620,40 +2605,24 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             </button>
           )}
 
-          {/* Showcase toggle */}
+          {/* Create album */}
           <button
-            onClick={() => setHideClutter((v) => !v)}
-            className={`showcase-mode-btn relative overflow-hidden flex items-center gap-2.5 px-5 py-2.5 rounded-full cursor-pointer font-bold text-[11px] uppercase tracking-[0.14em] select-none ${
-              hideClutter
-                ? 'showcase-mode-btn--active'
-                : 'showcase-mode-btn--inactive liquid-glass glass-prismatic-soft text-slate-600 hover:text-slate-900'
-            }`}
+            onClick={() => setCollageOpen(true)}
+            disabled={!jobId}
+            className="showcase-mode-btn showcase-mode-btn--active relative overflow-hidden flex items-center gap-2.5 px-5 py-2.5 rounded-full cursor-pointer font-bold text-[11px] uppercase tracking-[0.14em] select-none disabled:opacity-40 disabled:cursor-not-allowed"
+            title={jobId ? 'Design a themed PDF album from these picks' : 'An album requires a saved session'}
           >
-            {hideClutter && (
-              <span
-                className="absolute inset-0 pointer-events-none"
-                style={{
-                  background: 'linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.22) 50%, transparent 70%)',
-                  backgroundSize: '200% 100%',
-                  animation: 'shimmerSweep 3.5s ease-in-out infinite',
-                }}
-              />
-            )}
-
-            <Sparkles
-              className={`w-4 h-4 flex-shrink-0 transition-colors duration-300 ${hideClutter ? 'text-white' : 'text-lumina-500'}`}
-              style={hideClutter ? { animation: 'breathe 1.8s ease-in-out infinite' } : undefined}
+            <span
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background: 'linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.22) 50%, transparent 70%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmerSweep 3.5s ease-in-out infinite',
+              }}
             />
-
-            <span className="relative z-[1]">
-              {hideClutter ? 'Showcase On' : 'Best Shots'}
-            </span>
-
-            {hideClutter ? (
-              <span className="relative z-[1] w-2 h-2 rounded-full bg-white/80 flex-shrink-0" style={{ animation: 'breathe 1.2s ease-in-out infinite' }} />
-            ) : (
-              <ChevronRight className="w-3.5 h-3.5 text-lumina-400 flex-shrink-0" />
-            )}
+            <FileText className="w-4 h-4 flex-shrink-0 text-white" />
+            <span className="relative z-[1]">Create Album</span>
+            <ChevronRight className="relative z-[1] w-3.5 h-3.5 text-white/70 flex-shrink-0" />
           </button>
         </div>
       </div>
@@ -2731,17 +2700,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
         </div>
       )}
 
-      {!searchActive && !rejectsOpen && (hideClutter ? (
-        <BestShotsGallery
-          key="showcase"
-          events={filteredEvents}
-          identities={identities}
-          mmrMode={mmrMode}
-          onMmrModeChange={setMmrMode}
-          highlightPerson={highlightPerson}
-          onOpenItems={openLightbox}
-        />
-      ) : (
+      {!searchActive && !rejectsOpen && (
         <div key="events" className="space-y-20">
           {filteredEvents.map((event, i) => (
             <EventRow
@@ -2757,10 +2716,10 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             />
           ))}
         </div>
-      ))}
+      )}
 
       {/* No results for active filters */}
-      {!searchActive && !hideClutter && filteredEvents.length === 0 && (selectedPerson || selectedEvent) && (
+      {!searchActive && filteredEvents.length === 0 && (selectedPerson || selectedEvent) && (
         <div className="text-center py-20">
           <div className="liquid-glass rounded-3xl p-12 max-w-md mx-auto">
             <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
@@ -2813,8 +2772,24 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
           photoCount={curatedPhotoIds().length}
           enhancedCount={Object.keys(enhanceEntries).length}
           busy={collageBusy}
+          previewBusy={planBusy}
           onBuild={handleBuildCollage}
+          onPreview={handlePreviewAlbum}
+          onThemesLoaded={setCollageThemes}
           onClose={() => setCollageOpen(false)}
+        />
+      )}
+
+      {albumPlan && jobId && (
+        <AlbumViewer
+          jobId={jobId}
+          plan={albumPlan}
+          themes={collageThemes}
+          themeKey={albumTheme}
+          onThemeChange={setAlbumTheme}
+          onDownload={handleDownloadFromViewer}
+          downloading={collageBusy}
+          onClose={() => setAlbumPlan(null)}
         />
       )}
 

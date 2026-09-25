@@ -198,9 +198,34 @@ def test_image_model_is_overridable(monkeypatch):
     assert openrouter.image_model() == "some/other-model"
 
 
-def test_default_image_model_is_an_in_place_editor():
-    """The OpenAI image models regenerate the scene; don't default to one."""
-    assert not openrouter.DEFAULT_IMAGE_MODEL.startswith("openai/")
+def test_default_image_model_can_actually_edit():
+    """A text-to-image default would silently replace the user's photo."""
+    assert openrouter.can_edit_images(openrouter.DEFAULT_IMAGE_MODEL)
+    assert openrouter.DEFAULT_IMAGE_MODEL not in openrouter.MODELS_WITHOUT_EDITING
+
+
+def test_text_to_image_models_are_refused_for_editing():
+    for model in openrouter.MODELS_WITHOUT_EDITING:
+        assert not openrouter.can_edit_images(model)
+
+
+def test_flare_is_rejected_with_an_actionable_message(monkeypatch):
+    """It is served only on /images, which ignores the input photo entirely."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_IMAGE_MODEL", "openai/gpt-image-2.5-flare")
+    with pytest.raises(openrouter.OpenRouterError) as excinfo:
+        openrouter.edit_image(_jpeg(), "retouch")
+    message = str(excinfo.value)
+    assert "text-to-image" in message
+    assert openrouter.DEFAULT_IMAGE_MODEL in message
+
+
+def test_generate_image_decodes_b64_json(monkeypatch):
+    raw = _jpeg("red")
+    import base64
+
+    _patch_post(monkeypatch, {"data": [{"b64_json": base64.b64encode(raw).decode()}]})
+    assert openrouter.generate_image("a red square") == raw
 
 
 def _fake_response(payload, status=200):

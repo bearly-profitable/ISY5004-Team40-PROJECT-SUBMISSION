@@ -459,12 +459,28 @@ export type CollageTheme = {
   name: string;
   dark: boolean;
   swatch: [string, string, string];
+  /** Full palette, so the viewer can restyle a plan without refetching it. */
+  bgTop: string;
+  bgBottom: string;
+  ink: string;
+  muted: string;
+  accent: string;
+  frame: string;
+  grain: number;
+  serif: boolean;
+  shadowAlpha: number;
+  /** Pure paper: no gradient, no grain, no shadow, square corners. */
+  flat: boolean;
 };
+
+export type CharacterBody = { key: string; name: string };
 
 export async function getCollageThemes(): Promise<{
   themes: CollageTheme[];
   default: string;
   aiTitles: boolean;
+  aiCaptions?: boolean;
+  characterBodies?: CharacterBody[];
 }> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/collage/themes`, {
     headers: apiHeaders(),
@@ -473,6 +489,81 @@ export async function getCollageThemes(): Promise<{
   return response.json();
 }
 
+/** The album's layout, as computed by the backend planner.
+ *
+ *  Lengths are PDF points. The viewer scales everything by
+ *  (rendered page width / page.width), so a plan renders identically at any
+ *  size and the on-screen album matches the downloaded PDF page for page. */
+export type AlbumPlan = {
+  title: string;
+  subtitle: string;
+  footer: string;
+  stats: { value: string; label: string }[];
+  page: {
+    width: number;
+    height: number;
+    margin: number;
+    gutter: number;
+    cornerRadius: number;
+    captionHeight: number;
+    captionGap: number;
+    coverStripBottom: number;
+  };
+  theme: Omit<CollageTheme, 'swatch'>;
+  totalPages: number;
+  pages: AlbumPage[];
+};
+
+export type AlbumPage = {
+  kind: 'cover' | 'bento' | 'chapter' | 'cast';
+  /** 1-based among content pages; 0 on the cover. */
+  number: number;
+  tiles: AlbumTile[];
+  /** Heading on a chapter divider or the cast page. */
+  pageTitle: string;
+  pageSubtitle: string;
+  /** Where 小黑 stands on this page, if he is on it at all. */
+  character: AlbumCharacter | null;
+  portraits: AlbumPortrait[];
+};
+
+export type AlbumCharacter = {
+  pose: string;
+  body: string;
+  x: number;
+  top: number;
+  w: number;
+  h: number;
+  seed: number;
+  facing: number;
+};
+
+export type AlbumPortrait = {
+  castIndex: number;
+  name: string;
+  photoId: string;
+  /** Normalised [x1, y1, x2, y2] face box, for the circular crop. */
+  face: number[];
+  x: number;
+  top: number;
+  size: number;
+};
+
+export type AlbumTile = {
+  photoId: string;
+  /** True when the album embedded the AI-enhanced render, not the original. */
+  enhanced: boolean;
+  number: number;
+  x: number;
+  top: number;
+  w: number;
+  h: number;
+  /** Height of the image; less than `h` when a caption band is reserved. */
+  photoH: number;
+  caption: string;
+  subcaption: string;
+};
+
 export type CollageOptions = {
   photoIds: string[];
   title?: string;
@@ -480,8 +571,54 @@ export type CollageOptions = {
   theme?: string;
   autoTitle?: boolean;
   captions?: boolean;
+  aiCaptions?: boolean;
   useEnhanced?: boolean;
+  chapters?: boolean;
+  cast?: boolean;
+  character?: boolean;
+  characterBody?: string;
+  characterSeed?: number;
 };
+
+/** 小黑, drawn to order by the backend. Deterministic in its query string, so
+ *  the browser and the HTTP cache can both treat it as immutable. */
+export function xiaoheiUrl(
+  pose: string,
+  opts: {
+    w: number; h: number; seed?: number; body?: string; facing?: number;
+    ink?: string;
+    /** The eyes are holes in the body, so they take the page's colour. */
+    eye?: string;
+  },
+): string {
+  const params = new URLSearchParams({
+    w: String(Math.round(opts.w)),
+    h: String(Math.round(opts.h)),
+    seed: String(opts.seed ?? 0),
+    body: opts.body ?? 'bean',
+    facing: String(opts.facing ?? -1),
+    ink: (opts.ink ?? '#141414').replace('#', ''),
+    eye: (opts.eye ?? '#ffffff').replace('#', ''),
+  });
+  return `${BACKEND_BASE_URL}/api/xiaohei/${encodeURIComponent(pose)}.png?${params}`;
+}
+
+/** Fetch the album layout for the in-app viewer. Same request body as the
+ *  export, so what you page through is what you download. */
+export async function fetchAlbumPlan(
+  jobId: string,
+  options: CollageOptions,
+  signal?: AbortSignal,
+): Promise<AlbumPlan> {
+  const response = await fetch(`${BACKEND_BASE_URL}/api/collage/${jobId}/plan`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify(options),
+    signal,
+  });
+  await requireOk(response, 'Load album preview');
+  return response.json();
+}
 
 export async function downloadCollage(jobId: string, options: CollageOptions): Promise<void> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/collage/${jobId}`, {

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 import collage as collage_mod
+import xiaohei
 import corrections as corrections_mod
 import enhance as enhance_mod
 import openrouter
@@ -872,6 +873,16 @@ def start_enhance(body: EnhanceRequest) -> EnhanceJobResponse:
             status_code=503,
             detail="AI enhancement is not configured. Set OPENROUTER_API_KEY in backend/.env.",
         )
+    if not openrouter.can_edit_images():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"OPENROUTER_IMAGE_MODEL is set to '{openrouter.image_model()}', which is a "
+                f"text-to-image model on OpenRouter: it ignores the photo you send and "
+                f"returns an invented one. Set it to an image-editing model such as "
+                f"'{openrouter.DEFAULT_IMAGE_MODEL}'."
+            ),
+        )
     _get_result_or_404(body.jobId)
     source = _photo_path(body.jobId, body.photoId)
 
@@ -926,7 +937,15 @@ class CollageRequest(BaseModel):
     theme: str = collage_mod.DEFAULT_THEME
     autoTitle: bool = False
     captions: bool = True
+    aiCaptions: bool = False
     useEnhanced: bool = True
+    #: Divider pages between events, and a page introducing the people found.
+    chapters: bool = True
+    cast: bool = True
+    #: 小黑 on the divider and cast pages, and which silhouette he wears.
+    character: bool = False
+    characterBody: str = "bean"
+    characterSeed: int = 0
 
 
 @app.get("/api/collage/themes")
@@ -934,16 +953,28 @@ def collage_themes() -> dict:
     return {
         "themes": [
             {"key": t.key, "name": t.name, "dark": t.dark,
-             "swatch": [t.bg_top, t.accent, t.ink]}
+             "swatch": [t.bg_top, t.accent, t.ink],
+             # The full palette travels too: switching theme in the viewer is a
+             # restyle of a plan it already has, not another round trip.
+             "bgTop": t.bg_top, "bgBottom": t.bg_bottom, "ink": t.ink,
+             "muted": t.muted, "accent": t.accent, "frame": t.frame,
+             "grain": t.grain, "serif": t.display_serif,
+             "shadowAlpha": t.shadow_alpha, "flat": t.flat}
             for t in collage_mod.THEMES.values()
         ],
         "default": collage_mod.DEFAULT_THEME,
         "aiTitles": openrouter.is_configured(),
+        "aiCaptions": openrouter.is_configured(),
+        # The silhouettes 小黑 can wear, so the picker has one source of truth.
+        "characterBodies": [
+            {"key": b.key, "name": b.name} for b in xiaohei.BODIES.values()
+        ],
     }
 
 
-@app.post("/api/collage/{job_id}")
-def build_collage(job_id: str, body: CollageRequest):
+def _collage_spec(job_id: str, body: CollageRequest) -> collage_mod.CollageSpec:
+    """Resolve a collage request into a spec. Shared by the PDF export and the
+    viewer's plan endpoint so both describe exactly the same album."""
     if not body.photoIds:
         raise HTTPException(status_code=400, detail="photoIds must not be empty.")
     result = _get_result_or_404(job_id)
@@ -954,37 +985,65 @@ def build_collage(job_id: str, body: CollageRequest):
     for event in result.get("events", []):
         for pid in event.get("photoIds", []):
             labels[pid] = event.get("label") or ""
+    faces: dict[str, list[tuple[float, float, float, float]]] = {}
     for ident in result.get("identities", []):
         for pid in ident.get("photoIds", []):
             people.setdefault(pid, []).append(ident.get("label") or "")
+        for pid, box in (ident.get("faceBoxes") or {}).items():
+            if isinstance(box, (list, tuple)) and len(box) == 4:
+                faces.setdefault(pid, []).append(tuple(float(v) for v in box))
 
-    photos: list[collage_mod.CollagePhoto] = []
+    # (photoId, file, whether the file is still the original frame)
+    resolved: list[tuple[str, Path, bool]] = []
     for photo_id in body.photoIds:
         try:
             path = _photo_path(job_id, photo_id)
         except HTTPException:
             continue
+        is_original = True
         if body.useEnhanced:
             enhanced = _enhanced_path(job_id, photo_id)
             if enhanced.is_file():
                 path = enhanced
-        photos.append(
-            collage_mod.CollagePhoto(
-                path=path,
-                caption=(labels.get(photo_id, "") if body.captions else ""),
-                subcaption=(" - ".join(people.get(photo_id, [])[:3]) if body.captions else ""),
-            )
+                is_original = False
+        resolved.append((photo_id, path, is_original))
+
+    if not resolved:
+        raise HTTPException(status_code=404, detail="None of those photos are available.")
+
+    # Captions: the text model writes one title per photo when asked, otherwise
+    # the event label is used. A model failure degrades to labels, never a 500.
+    ai_captions: list[str] = []
+    if body.captions and body.aiCaptions and openrouter.is_configured():
+        scenes = ", ".join(dict.fromkeys(
+            label for label in (labels.get(pid, "") for pid, _, _ in resolved) if label))
+        ai_captions = collage_mod.caption_photos(
+            [path for _, path, _ in resolved],
+            context=f"scenes: {scenes}" if scenes else "",
         )
 
-    if not photos:
-        raise HTTPException(status_code=404, detail="None of those photos are available.")
+    photos: list[collage_mod.CollagePhoto] = []
+    for i, (photo_id, path, is_original) in enumerate(resolved):
+        if not body.captions:
+            caption = subcaption = ""
+        else:
+            caption = (ai_captions[i] if i < len(ai_captions) else "") or labels.get(photo_id, "")
+            subcaption = " · ".join(dict.fromkeys(people.get(photo_id, [])))[:48]
+        photos.append(collage_mod.CollagePhoto(
+            path=path, photo_id=photo_id, enhanced=not is_original,
+            caption=caption, subcaption=subcaption,
+            chapter=labels.get(photo_id, "") if body.chapters else "",
+            # Face boxes are measured against the original frame. An AI edit can
+            # re-render at a different size, so they no longer apply to it.
+            faces=tuple(faces.get(photo_id, ())) if is_original else (),
+        ))
 
     title, subtitle = body.title.strip(), body.subtitle.strip()
     if body.autoTitle and openrouter.is_configured():
         try:
             names = [i.get("label") for i in result.get("identities", []) if i.get("label")]
             title, subtitle = collage_mod.suggest_title(
-                len(photos), [labels.get(p, "") for p in body.photoIds], names
+                len(photos), [labels.get(pid, "") for pid, _, _ in resolved], names
             )
         except Exception:
             pass  # a title is never worth failing the export over
@@ -993,21 +1052,117 @@ def build_collage(job_id: str, body: CollageRequest):
     if not subtitle:
         subtitle = f"{len(photos)} photo{'s' if len(photos) != 1 else ''}"
 
+    # The cast: one portrait per identity, taken from a photo that is actually
+    # in this album so the page introduces people the reader is about to meet.
+    chosen_order = {pid: i for i, (pid, _, _) in enumerate(resolved)}
+    cast: list[collage_mod.CastMember] = []
+    if body.cast:
+        for ident in result.get("identities", []):
+            name = ident.get("label") or ""
+            boxes = ident.get("faceBoxes") or {}
+            candidates = [pid for pid in ident.get("photoIds", []) if pid in chosen_order]
+            if not name or not candidates:
+                continue
+            # Prefer a photo we have a face box for; otherwise any of theirs.
+            pid = next((p for p in candidates if p in boxes), candidates[0])
+            try:
+                path = _photo_path(job_id, pid)
+            except HTTPException:
+                continue
+            raw = boxes.get(pid)
+            face = (tuple(float(v) for v in raw)
+                    if isinstance(raw, (list, tuple)) and len(raw) == 4 else None)
+            cast.append(collage_mod.CastMember(
+                name=name, path=path, face=face, photo_id=pid))
+
+    # Cover stat rail, counted over what actually made it into the album.
+    chosen = {pid for pid, _, _ in resolved}
+    num_people = len({ident.get("id") for ident in result.get("identities", [])
+                      if chosen & set(ident.get("photoIds", []))})
+    num_events = len({event.get("id") for event in result.get("events", [])
+                      if chosen & set(event.get("photoIds", []))})
+    stats = [(str(len(photos)), "photos")]
+    if num_people:
+        stats.append((str(num_people), "people" if num_people != 1 else "person"))
+    if num_events:
+        stats.append((str(num_events), "events" if num_events != 1 else "event"))
+
+    return collage_mod.CollageSpec(
+        title=title, subtitle=subtitle, theme=body.theme,
+        photos=photos, stats=stats, cast=cast,
+        character=body.character,
+        character_body=body.characterBody,
+        character_seed=body.characterSeed,
+    )
+
+
+@app.post("/api/collage/{job_id}")
+def build_collage(job_id: str, body: CollageRequest):
+    spec = _collage_spec(job_id, body)
     try:
-        pdf = collage_mod.build_collage_pdf(
-            collage_mod.CollageSpec(
-                title=title, subtitle=subtitle, theme=body.theme, photos=photos
-            )
-        )
+        pdf = collage_mod.build_collage_pdf(spec)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Collage failed: {exc}") from exc
 
-    name = safe_filename(title) or "lumina-album"
+    name = safe_filename(spec.title) or "lumina-album"
     return Response(
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
     )
+
+
+@app.get("/api/xiaohei/{pose}.png")
+def xiaohei_png(
+    pose: str,
+    w: int = 320,
+    h: int = 320,
+    seed: int = 0,
+    body: str = "bean",
+    facing: int = -1,
+    ink: str = "141414",
+    eye: str = "ffffff",
+):
+    """小黑, drawn to order, for the album viewer.
+
+    The PDF renders him in-process; the browser cannot, so it asks for the same
+    drawing here. Deterministic in its query string, hence the long cache: the
+    same character at the same size is byte-identical every time.
+    """
+    w = max(8, min(int(w), 2000))
+    h = max(8, min(int(h), 2000))
+    try:
+        colour = collage_mod._rgb(ink)
+    except Exception:
+        colour = (20, 20, 20)
+    try:
+        eye_colour = collage_mod._rgb(eye)
+    except Exception:
+        eye_colour = (255, 255, 255)
+
+    try:
+        art = xiaohei.cached(pose, body, w, h, int(seed), colour,
+                             1 if int(facing) > 0 else -1, eye_colour)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not draw: {exc}") from exc
+
+    buf = io_mod.BytesIO()
+    art.save(buf, format="PNG", optimize=True)
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
+@app.post("/api/collage/{job_id}/plan")
+def collage_plan(job_id: str, body: CollageRequest) -> dict:
+    """The album's layout, without rendering it: what the flip-book draws."""
+    spec = _collage_spec(job_id, body)
+    try:
+        return collage_mod.plan_to_dict(collage_mod.plan_album(spec))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Album plan failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
