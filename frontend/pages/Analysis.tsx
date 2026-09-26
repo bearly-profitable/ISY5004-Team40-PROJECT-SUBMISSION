@@ -83,7 +83,7 @@ const RadarChart: React.FC<{ metrics: FaceMetrics }> = ({ metrics }) => {
       })}
 
       {/* Data polygon */}
-      <path d={pathD} fill="url(#radarFill)" stroke="rgba(180,167,214,0.8)" strokeWidth="1.5" className="anim-scale-in" />
+      <path d={pathD} fill="url(#radarFill)" stroke="rgba(180,167,214,0.8)" strokeWidth="1.5" className="" data-anim="scale" />
 
       {/* Data dots */}
       {dataPoints.map((p, i) => (
@@ -176,7 +176,7 @@ const FaceCard: React.FC<{ face: FaceResult; index: number }> = ({ face, index }
 
   return (
     <div
-      className="liquid-glass-heavy glass-prismatic rounded-3xl overflow-hidden anim-fade-in-up"
+      className="liquid-glass-heavy glass-prismatic rounded-3xl overflow-hidden" data-anim="fade-up"
       style={{ animationDelay: `${index * 150}ms` }}
     >
       <div className="p-6 sm:p-8">
@@ -208,7 +208,7 @@ const FaceCard: React.FC<{ face: FaceResult; index: number }> = ({ face, index }
           <div className="flex-1 space-y-4">
             <h4 className="text-sm font-semibold text-slate-600 uppercase tracking-wider mb-3">Category Breakdown</h4>
             {METRIC_META.map((cat, i) => (
-              <div key={cat.key} className="anim-fade-in-up" style={{ animationDelay: `${(index * 150) + (i * 80)}ms` }}>
+              <div key={cat.key} className="" data-anim="fade-up" style={{ animationDelay: `${(index * 150) + (i * 80)}ms` }}>
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2">
                     <span style={{ color: cat.color }}>{cat.icon}</span>
@@ -246,7 +246,7 @@ const DrivePickerModal: React.FC<{
       />
       <div
         className="relative liquid-glass-heavy glass-prismatic rounded-3xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl"
-        style={{ animation: 'scaleInBounce 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both' }}
+        data-anim="pop"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 border-b border-white/20">
@@ -376,7 +376,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
 
         <div className="max-w-3xl mx-auto px-4 pt-20 pb-16">
           {/* Header */}
-          <div className="text-center mb-12 anim-fade-in-up">
+          <div className="text-center mb-12" data-anim="fade-up">
             <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full liquid-glass glass-prismatic-soft mb-4">
               <Sparkles className="w-3.5 h-3.5 text-lumina-500" />
               <span className="text-xs font-medium text-lumina-600 tracking-wide">AI Face Analysis</span>
@@ -444,7 +444,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
             ].map((card, i) => (
               <div
                 key={card.title}
-                className="liquid-glass glass-prismatic-soft rounded-2xl p-5 text-center anim-fade-in-up"
+                className="liquid-glass glass-prismatic-soft rounded-2xl p-5 text-center" data-anim="fade-up"
                 style={{ animationDelay: `${200 + i * 100}ms` }}
               >
                 <div className="w-10 h-10 rounded-xl liquid-glass flex items-center justify-center mx-auto mb-3 text-lumina-500">
@@ -476,7 +476,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
         <div className="mesh-orb-1" /><div className="mesh-orb-2" /><div className="mesh-orb-3" />
 
         <div className="max-w-md mx-auto px-4 text-center">
-          <div className="liquid-glass-heavy glass-prismatic rounded-3xl p-10 anim-fade-in-up">
+          <div className="liquid-glass-heavy glass-prismatic rounded-3xl p-10" data-anim="fade-up">
             {/* Preview thumb */}
             {selectedImage && (
               <div className="w-32 h-32 rounded-2xl overflow-hidden liquid-glass mx-auto mb-6 shadow-lg">
@@ -511,7 +511,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
         <div className="mesh-orb-1" /><div className="mesh-orb-2" /><div className="mesh-orb-3" />
 
         <div className="max-w-md mx-auto px-4 text-center">
-          <div className="liquid-glass-heavy glass-prismatic rounded-3xl p-10 anim-fade-in-up">
+          <div className="liquid-glass-heavy glass-prismatic rounded-3xl p-10" data-anim="fade-up">
             <div className="w-14 h-14 rounded-2xl bg-red-50 flex items-center justify-center mx-auto mb-4">
               <AlertCircle className="w-7 h-7 text-red-400" />
             </div>
@@ -538,7 +538,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
 
       <div className="max-w-5xl mx-auto px-4 pt-20 pb-16">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-10 anim-fade-in-up">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-10" data-anim="fade-up">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full liquid-glass glass-prismatic-soft mb-2">
               <Sparkles className="w-3 h-3 text-lumina-500" />
@@ -564,7 +564,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
 
         {/* Original image preview */}
         {selectedImage && (
-          <div className="liquid-glass glass-prismatic-soft rounded-2xl p-3 mb-10 inline-block anim-fade-in-up d-100">
+          <div className="liquid-glass glass-prismatic-soft rounded-2xl p-3 mb-10 inline-block" data-anim="fade-up" data-delay="100">
             <img
               src={selectedImage}
               alt="Analyzed"
@@ -575,7 +575,7 @@ export const Analysis: React.FC<AnalysisProps> = ({ photos }) => {
 
         {/* No faces */}
         {result?.faces.length === 0 && (
-          <div className="liquid-glass-heavy glass-prismatic rounded-3xl p-12 text-center anim-fade-in-up">
+          <div className="liquid-glass-heavy glass-prismatic rounded-3xl p-12 text-center" data-anim="fade-up">
             <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4">
               <User className="w-8 h-8 text-slate-300" />
             </div>

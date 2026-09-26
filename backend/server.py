@@ -25,8 +25,9 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 import collage as collage_mod
-import xiaohei
+import mascot
 import corrections as corrections_mod
+import auth
 import enhance as enhance_mod
 import openrouter
 from curation import DEFAULT_WEIGHTS, PreferenceModel, rescore_members
@@ -42,6 +43,8 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = Path(os.getenv("LUMINA_DB_PATH", ROOT / "lumina.db"))
 JOB_TTL_HOURS = float(os.getenv("JOB_TTL_HOURS", "24"))
+# Sessions of signed-in users are kept longer than anonymous ones.
+USER_JOB_TTL_HOURS = float(os.getenv("USER_JOB_TTL_HOURS", "720"))
 MAX_PHOTOS = int(os.getenv("MAX_PHOTOS", "300"))
 API_KEY = (os.getenv("LUMINA_API_KEY") or "").strip()  # empty = auth disabled
 
@@ -147,10 +150,11 @@ def worker_loop() -> None:
 
 
 def cleanup_loop() -> None:
-    """TTL cleanup: drop job rows + on-disk inputs older than JOB_TTL_HOURS."""
+    """TTL cleanup: drop job rows + on-disk inputs older than JOB_TTL_HOURS
+    (USER_JOB_TTL_HOURS for signed-in users' sessions)."""
     while True:
         try:
-            expired = store.delete_jobs_older_than(JOB_TTL_HOURS * 3600)
+            expired = store.delete_jobs_older_than(JOB_TTL_HOURS * 3600, USER_JOB_TTL_HOURS * 3600)
             for job_id in expired:
                 job_dir = JOBS_DIR / job_id
                 if job_dir.exists():
@@ -259,11 +263,15 @@ def safe_filename(name: str) -> str:
     return cleaned or "image"
 
 
-def _client_id_or_400(client_id: Optional[str]) -> str:
-    cid = (client_id or "").strip()
-    if not cid or len(cid) > 128:
-        raise HTTPException(status_code=400, detail="X-Client-Id header is required.")
-    return cid
+def _owner(authorization: Optional[str], client_id: Optional[str]) -> auth.Owner:
+    """The signed-in user (verified Supabase token) or the anonymous browser."""
+    return auth.resolve_owner(authorization, client_id)
+
+
+def _owner_id_or_none(authorization: Optional[str], client_id: Optional[str]) -> Optional[str]:
+    """Like _owner, but a caller with no id at all gets None (ownerless)."""
+    owner = auth.resolve_owner(authorization, client_id, required=False)
+    return owner.id if owner else None
 
 
 def _get_result_or_404(job_id: str) -> dict:
@@ -286,7 +294,10 @@ def health() -> dict[str, str]:
 async def analyze(
     files: list[UploadFile] = File(...),
     photoMeta: str = Form(...),
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
 ) -> AnalyzeJobResponse:
+    owner_id = _owner_id_or_none(authorization, x_client_id)
     if not files:
         raise HTTPException(status_code=400, detail="At least one image is required.")
     if len(files) > MAX_PHOTOS:
@@ -328,7 +339,7 @@ async def analyze(
         photo_ids.append(photo_id)
         photo_map[photo_id] = json.dumps({"file": final_name, "name": original_name})
 
-    store.create_job(job_id, num_photos=len(files), photo_map=photo_map)
+    store.create_job(job_id, num_photos=len(files), photo_map=photo_map, owner=owner_id)
     with job_lock:
         job_store[job_id] = {
             "jobId": job_id,
@@ -417,16 +428,51 @@ async def analyze_stream(job_id: str) -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/sessions")
-def list_sessions() -> dict:
-    return {"sessions": store.list_sessions(limit=50)}
+def list_sessions(
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    """The caller's own sessions. Anonymous browsers also still see the
+    ownerless sessions made before accounts existed, as everyone did then."""
+    owner = auth.resolve_owner(authorization, x_client_id, required=False)
+    if owner is None:
+        return {"sessions": store.list_sessions(limit=200, owner=None), "signedIn": False}
+    return {
+        "sessions": store.list_sessions(limit=200, owner=owner.id, include_legacy=not owner.signed_in),
+        "signedIn": owner.signed_in,
+    }
+
+
+@app.post("/api/account/claim")
+def claim_account(
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    """Move what this browser made while signed out into the account."""
+    owner = _owner(authorization, x_client_id)
+    if not owner.signed_in:
+        raise HTTPException(status_code=401, detail="Sign in first.")
+    anon = (x_client_id or "").strip()
+    if not anon or anon.startswith("user:"):
+        return {"sessions": 0, "feedback": 0, "preferences": 0}
+    return store.claim_anonymous(anon, owner.id)
 
 
 @app.delete("/api/sessions/{job_id}")
-def delete_session(job_id: str) -> dict:
+def delete_session(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
     """Delete a stored session: DB row, CLIP search index, and the job's
     photos/thumbnails on disk. Re-analysing the same images afterwards runs
     a completely fresh job (per-image features stay cached by content hash,
     so the re-run is fast but re-scored from scratch)."""
+    owner_id = _owner_id_or_none(authorization, x_client_id)
+    exists, job_owner = store.job_owner(job_id)
+    # Someone else's session is reported as missing, not as forbidden.
+    if not exists or (job_owner is not None and job_owner != owner_id):
+        raise HTTPException(status_code=404, detail="Unknown session id.")
     if not store.delete_job(job_id):
         raise HTTPException(status_code=404, detail="Unknown session id.")
     with job_lock:
@@ -584,9 +630,10 @@ def _norm_signals_for(result: dict, event_id: str, photo_id: str) -> Optional[di
 @app.post("/api/feedback")
 def submit_feedback(
     body: FeedbackRequest,
+    authorization: Optional[str] = Header(default=None),
     x_client_id: Optional[str] = Header(default=None),
 ) -> dict:
-    client_id = _client_id_or_400(x_client_id)
+    client_id = _owner(authorization, x_client_id).id
     result = _get_result_or_404(body.jobId)
 
     winner_sig = _norm_signals_for(result, body.eventId, body.winnerPhotoId)
@@ -619,8 +666,11 @@ def submit_feedback(
 
 
 @app.get("/api/preferences")
-def get_preferences(x_client_id: Optional[str] = Header(default=None)) -> dict:
-    client_id = _client_id_or_400(x_client_id)
+def get_preferences(
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    client_id = _owner(authorization, x_client_id).id
     model = PreferenceModel.from_dict(store.get_preferences(client_id))
     return {
         "weights": model.weights,
@@ -631,21 +681,53 @@ def get_preferences(x_client_id: Optional[str] = Header(default=None)) -> dict:
 
 
 @app.post("/api/preferences/reset")
-def reset_preferences(x_client_id: Optional[str] = Header(default=None)) -> dict:
-    client_id = _client_id_or_400(x_client_id)
+def reset_preferences(
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    client_id = _owner(authorization, x_client_id).id
     model = PreferenceModel()
     store.save_preferences(client_id, model.to_dict())
     return {"weights": model.weights, "nUpdates": 0}
 
 
+class PreferenceWeightsRequest(BaseModel):
+    weights: dict[str, float]
+
+
+@app.put("/api/preferences")
+def set_preferences(
+    body: PreferenceWeightsRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    """Hand-tuned weights from the profile page. They're normalised onto the
+    same simplex the learner uses, and later swaps keep learning from them."""
+    client_id = _owner(authorization, x_client_id).id
+    if set(body.weights) != set(DEFAULT_WEIGHTS):
+        raise HTTPException(status_code=400, detail=f"weights must have exactly: {sorted(DEFAULT_WEIGHTS)}")
+    raw = [max(0.0, float(body.weights[k])) for k in DEFAULT_WEIGHTS]
+    if sum(raw) <= 0:
+        raise HTTPException(status_code=400, detail="At least one weight must be above zero.")
+    model = PreferenceModel.from_dict(store.get_preferences(client_id))
+    projected = model._project(np.array(raw, dtype=np.float64))
+    model.weights = {k: float(projected[i]) for i, k in enumerate(DEFAULT_WEIGHTS)}
+    store.save_preferences(client_id, model.to_dict())
+    return {"weights": model.weights, "nUpdates": model.n_updates, "defaultWeights": DEFAULT_WEIGHTS}
+
+
 @app.post("/api/rescore/{job_id}")
-def rescore(job_id: str, x_client_id: Optional[str] = Header(default=None)) -> dict:
+def rescore(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
     """Re-rank every event under the caller's personalised weights.
 
     Returns per-event rankings; the canonical stored result keeps the default
     weighting so different users can each see their own view.
     """
-    client_id = _client_id_or_400(x_client_id)
+    client_id = _owner(authorization, x_client_id).id
     result = _get_result_or_404(job_id)
     model = PreferenceModel.from_dict(store.get_preferences(client_id))
 
@@ -942,10 +1024,10 @@ class CollageRequest(BaseModel):
     #: Divider pages between events, and a page introducing the people found.
     chapters: bool = True
     cast: bool = True
-    #: 小黑 on the divider and cast pages, and which silhouette he wears.
+    #: Lumi on the divider and cast pages and in the corner of photo pages,
+    #: and which outfit (colourway) Lumi wears.
     character: bool = False
-    characterBody: str = "bean"
-    characterSeed: int = 0
+    characterOutfit: str = mascot.DEFAULT_OUTFIT
 
 
 @app.get("/api/collage/themes")
@@ -954,8 +1036,6 @@ def collage_themes() -> dict:
         "themes": [
             {"key": t.key, "name": t.name, "dark": t.dark,
              "swatch": [t.bg_top, t.accent, t.ink],
-             # The full palette travels too: switching theme in the viewer is a
-             # restyle of a plan it already has, not another round trip.
              "bgTop": t.bg_top, "bgBottom": t.bg_bottom, "ink": t.ink,
              "muted": t.muted, "accent": t.accent, "frame": t.frame,
              "grain": t.grain, "serif": t.display_serif,
@@ -965,16 +1045,44 @@ def collage_themes() -> dict:
         "default": collage_mod.DEFAULT_THEME,
         "aiTitles": openrouter.is_configured(),
         "aiCaptions": openrouter.is_configured(),
-        # The silhouettes 小黑 can wear, so the picker has one source of truth.
-        "characterBodies": [
-            {"key": b.key, "name": b.name} for b in xiaohei.BODIES.values()
+        # Lumi's outfits, with the CSS filter values that reproduce each one,
+        # so the picker and the web UI have one source of truth.
+        "characterOutfits": [
+            {"key": key, "name": name, "hue": hue, "saturate": sat}
+            for key, (name, hue, sat) in mascot.OUTFITS.items()
         ],
     }
 
 
+def _photo_scenes(job_id: str, photo_ids: list[str]) -> dict[str, str]:
+    """photoId -> CLIP zero-shot scene label, from the job's search index.
+
+    Reuses the embeddings the pipeline already computed, so this costs one
+    matrix multiply. Photos below the confidence floor get no label, and a
+    server without CLIP (or an expired index) gets none at all — Lumi then
+    falls back to the chapter label or a work pose.
+    """
+    if pipeline.clip is None:
+        return {}
+    try:
+        index = store.cache_get(job_id, kind="clip_index")
+        if index is None:
+            return {}
+        row = {pid: i for i, pid in enumerate(index["photoIds"])}
+        matrix = np.asarray(index["matrix"], dtype=np.float32)
+        scenes: dict[str, str] = {}
+        for pid in photo_ids:
+            if pid in row:
+                named = pipeline.clip.name_event(matrix[row[pid]:row[pid] + 1])
+                if named:
+                    scenes[pid] = named["label"]
+        return scenes
+    except Exception:
+        return {}                   # scenes are a nicety, never a failed export
+
+
 def _collage_spec(job_id: str, body: CollageRequest) -> collage_mod.CollageSpec:
-    """Resolve a collage request into a spec. Shared by the PDF export and the
-    viewer's plan endpoint so both describe exactly the same album."""
+    """Resolve a collage request into the spec the PDF is built from."""
     if not body.photoIds:
         raise HTTPException(status_code=400, detail="photoIds must not be empty.")
     result = _get_result_or_404(job_id)
@@ -1022,6 +1130,9 @@ def _collage_spec(job_id: str, body: CollageRequest) -> collage_mod.CollageSpec:
             context=f"scenes: {scenes}" if scenes else "",
         )
 
+    # What each photo shows, so Lumi can dress for the page it lands on.
+    scenes = _photo_scenes(job_id, [pid for pid, _, _ in resolved]) if body.character else {}
+
     photos: list[collage_mod.CollagePhoto] = []
     for i, (photo_id, path, is_original) in enumerate(resolved):
         if not body.captions:
@@ -1036,6 +1147,7 @@ def _collage_spec(job_id: str, body: CollageRequest) -> collage_mod.CollageSpec:
             # Face boxes are measured against the original frame. An AI edit can
             # re-render at a different size, so they no longer apply to it.
             faces=tuple(faces.get(photo_id, ())) if is_original else (),
+            scene=scenes.get(photo_id, ""),
         ))
 
     title, subtitle = body.title.strip(), body.subtitle.strip()
@@ -1091,8 +1203,8 @@ def _collage_spec(job_id: str, body: CollageRequest) -> collage_mod.CollageSpec:
         title=title, subtitle=subtitle, theme=body.theme,
         photos=photos, stats=stats, cast=cast,
         character=body.character,
-        character_body=body.characterBody,
-        character_seed=body.characterSeed,
+        character_outfit=(body.characterOutfit if body.characterOutfit in mascot.OUTFITS
+                          else mascot.DEFAULT_OUTFIT),
     )
 
 
@@ -1110,59 +1222,6 @@ def build_collage(job_id: str, body: CollageRequest):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
     )
-
-
-@app.get("/api/xiaohei/{pose}.png")
-def xiaohei_png(
-    pose: str,
-    w: int = 320,
-    h: int = 320,
-    seed: int = 0,
-    body: str = "bean",
-    facing: int = -1,
-    ink: str = "141414",
-    eye: str = "ffffff",
-):
-    """小黑, drawn to order, for the album viewer.
-
-    The PDF renders him in-process; the browser cannot, so it asks for the same
-    drawing here. Deterministic in its query string, hence the long cache: the
-    same character at the same size is byte-identical every time.
-    """
-    w = max(8, min(int(w), 2000))
-    h = max(8, min(int(h), 2000))
-    try:
-        colour = collage_mod._rgb(ink)
-    except Exception:
-        colour = (20, 20, 20)
-    try:
-        eye_colour = collage_mod._rgb(eye)
-    except Exception:
-        eye_colour = (255, 255, 255)
-
-    try:
-        art = xiaohei.cached(pose, body, w, h, int(seed), colour,
-                             1 if int(facing) > 0 else -1, eye_colour)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not draw: {exc}") from exc
-
-    buf = io_mod.BytesIO()
-    art.save(buf, format="PNG", optimize=True)
-    return Response(
-        content=buf.getvalue(),
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
-    )
-
-
-@app.post("/api/collage/{job_id}/plan")
-def collage_plan(job_id: str, body: CollageRequest) -> dict:
-    """The album's layout, without rendering it: what the flip-book draws."""
-    spec = _collage_spec(job_id, body)
-    try:
-        return collage_mod.plan_to_dict(collage_mod.plan_album(spec))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Album plan failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

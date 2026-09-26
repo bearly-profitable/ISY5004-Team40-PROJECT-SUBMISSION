@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
+import { Lumi, LumiPose, preloadPoses } from '../components/Lumi';
 import { AnalyzeResult, AnalyzeStatus, analysisStreamUrl, getAnalysisStatus } from '../lib/analysisApi';
 import { Photo } from '../types';
 
@@ -26,6 +27,19 @@ const PIPELINE_STEPS: PipelineStep[] = [
   { key: 'quality_scoring', label: 'Ranking, captions & duplicate detection' },
   { key: 'finalizing', label: 'Preparing gallery' },
 ];
+
+/** What Lumi is doing, and saying, during each stage. */
+const STEP_LUMI: Record<string, { pose: LumiPose; line: string }> = {
+  loading_models: { pose: 'sleepy', line: 'Stretching… waking up my brain!' },
+  analyzing: { pose: 'search', line: 'Looking closely at every face and scene…' },
+  reid_embedding: { pose: 'camera', line: 'Remembering outfits, in case someone turns away.' },
+  identity_clustering: { pose: 'tag', line: 'Working out who’s who…' },
+  clustering_scoring: { pose: 'sort', line: 'Sorting everything into moments.' },
+  quality_scoring: { pose: 'star', line: 'Picking the very best shots!' },
+  finalizing: { pose: 'carry', line: 'Carrying it all to your gallery…' },
+  done: { pose: 'celebrate', line: 'All done! Come and see!' },
+};
+preloadPoses(Object.values(STEP_LUMI).map((s) => s.pose));
 
 export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onComplete, onError }) => {
   const [progress, setProgress] = useState(0);
@@ -126,45 +140,53 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
   const pastAnalysis = done || activeIdx >= 2;
   const litCount = pastAnalysis ? photos.length : imagesDone;
 
+  const lumi = done ? STEP_LUMI.done : STEP_LUMI[PIPELINE_STEPS[activeIdx]?.key] ?? STEP_LUMI.loading_models;
+
   return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-12 sm:py-16 flex flex-col items-center">
-      {/* Hero: percentage + label */}
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-10 flex flex-col items-center">
+      {/* Lumi narrates the pipeline, one pose per stage. */}
+      <div data-anim="pop" className="mb-5 flex justify-center">
+        <Lumi pose={lumi.pose} size={150} say={lumi.line} bubble="top" />
+      </div>
+
+      {/* Percentage + label */}
       <div
-        className={`liquid-glass-heavy glass-prismatic rounded-2xl px-8 py-5 flex items-center gap-6 mb-6 w-full max-w-md transition-all duration-700 ${
-          done ? 'anim-glow' : ''
-        }`}
-        style={{ animation: 'scaleInBounce 0.6s cubic-bezier(0.34,1.56,0.64,1) both' }}
+        data-anim="fade-up"
+        className="liquid-glass-heavy rounded-[28px] px-6 sm:px-8 py-5 flex items-center gap-5 mb-4 w-full max-w-md"
       >
-        <div className="text-4xl sm:text-5xl font-light tracking-tighter tabular-nums shrink-0">
-          {progress}<span className="text-gradient">%</span>
+        <div className="font-display text-5xl font-bold tabular-nums shrink-0 text-slate-900">
+          {progress}<span className="text-lumi-gradient">%</span>
         </div>
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold tracking-tight truncate">
-            {done ? 'Gallery ready!' : 'Analyzing your photos'}
-          </h2>
-          <p className="text-xs text-slate-400 truncate">{stepLabel}</p>
+          <h1 className="text-base font-extrabold truncate font-sans">
+            {done ? 'Your gallery is ready!' : 'Analyzing your photos'}
+          </h1>
+          <p className="text-xs text-slate-500 truncate">{stepLabel}</p>
           {photos.length > 0 && !done && (
-            <p className="text-[10px] text-lumina-500 font-bold uppercase tracking-widest mt-1 tabular-nums">
-              {Math.min(litCount, photos.length)} / {photos.length} photos analysed
+            <p className="text-[11px] text-lumina-600 font-extrabold mt-1 tabular-nums">
+              {Math.min(litCount, photos.length)} / {photos.length} photos looked at
             </p>
           )}
         </div>
       </div>
 
-      {/* Progress bar */}
-      <div className="w-full max-w-md glass-progress-track h-1.5 rounded-full mb-6 anim-fade-in-down">
+      <div
+        className="w-full max-w-md h-3 rounded-full mb-6 bg-white/70 overflow-hidden shadow-inner"
+        role="progressbar"
+        aria-valuenow={progress}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Analysis progress"
+      >
         <div
-          className="glass-progress-fill h-full rounded-full transition-[width] duration-500 ease-out"
-          style={{ width: `${progress}%` }}
+          className="h-full rounded-full transition-[width] duration-500 ease-out"
+          style={{ width: `${progress}%`, background: 'var(--lumi-gradient)' }}
         />
       </div>
 
-      {/* Live thumbnail grid — tiles light up as each image is analysed */}
+      {/* Live thumbnail grid: tiles light up as each image is analysed */}
       {photos.length > 0 && (
-        <div
-          className="w-full mb-6 liquid-glass rounded-2xl p-3"
-          style={{ animation: 'fadeInUp 0.5s var(--smooth, ease) 150ms both' }}
-        >
+        <div data-anim="fade-up" data-delay="120" className="w-full mb-6 liquid-glass rounded-[24px] p-3">
           <div
             className="grid gap-1.5"
             style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${photos.length > 60 ? 34 : 48}px, 1fr))` }}
@@ -172,10 +194,7 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
             {photos.map((photo, i) => {
               const lit = i < litCount;
               return (
-                <div
-                  key={photo.id}
-                  className="relative aspect-square rounded-lg overflow-hidden bg-slate-200/40"
-                >
+                <div key={photo.id} className="relative aspect-square rounded-lg overflow-hidden bg-slate-200/40">
                   <img
                     src={photo.url}
                     alt=""
@@ -188,13 +207,10 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
                     }}
                   />
                   {lit && !done && i === litCount - 1 && (
-                    <div className="absolute inset-0 ring-2 ring-inset ring-lumina-400/80 rounded-lg" />
+                    <div className="absolute inset-0 ring-2 ring-inset ring-lumina-400 rounded-lg" />
                   )}
                   {lit && (
-                    <div
-                      className="absolute bottom-0.5 right-0.5 w-3 h-3 rounded-full bg-lumina-500 flex items-center justify-center"
-                      style={{ animation: 'scaleIn 0.3s cubic-bezier(0.34,1.56,0.64,1) both' }}
-                    >
+                    <div data-anim="pop" className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 rounded-full bg-lumina-500 flex items-center justify-center">
                       <CheckCircle2 className="w-2.5 h-2.5 text-white" />
                     </div>
                   )}
@@ -205,52 +221,38 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
         </div>
       )}
 
-      {/* Step log — compact, scrollable */}
+      {/* Step log */}
       <div
         ref={logRef}
-        className="w-full max-w-md liquid-glass rounded-xl max-h-52 overflow-y-auto overscroll-contain px-1 py-1 space-y-px scroll-smooth"
+        className="w-full max-w-md liquid-glass rounded-[24px] max-h-56 overflow-y-auto overscroll-contain p-1.5 space-y-px scroll-smooth"
       >
         {PIPELINE_STEPS.map((step, i) => {
           const isDone = i < activeIdx || (i === activeIdx && done);
           const isActive = i === activeIdx && !done;
-
           return (
             <div
               key={step.key}
               data-active={isActive ? 'true' : undefined}
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-300 ${
-                isActive
-                  ? 'liquid-glass glass-prismatic-soft'
-                  : isDone
-                  ? 'opacity-70'
-                  : 'opacity-30'
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-2xl transition-all duration-300 ${
+                isActive ? 'bg-white shadow-sm' : isDone ? 'opacity-75' : 'opacity-40'
               }`}
             >
-              {/* Icon */}
               <div className="w-5 h-5 flex items-center justify-center shrink-0">
                 {isDone ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                 ) : isActive ? (
-                  <Loader2
-                    className="w-3.5 h-3.5 text-lumina-400"
-                    style={{ animation: 'spinSlow 1.2s linear infinite' }}
-                  />
+                  <Loader2 className="w-4 h-4 text-lumina-500 animate-spin" />
                 ) : (
-                  <div className="w-1.5 h-1.5 rounded-full bg-slate-500/40" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-slate-400/60" />
                 )}
               </div>
-
-              {/* Label */}
-              <span
-                className={`text-xs font-medium flex-1 truncate ${
-                  isActive ? 'text-slate-900' : isDone ? 'text-slate-400' : 'text-slate-500'
-                }`}
-              >
+              <span className={`text-sm font-bold flex-1 truncate ${
+                isActive ? 'text-slate-900' : 'text-slate-500'
+              }`}>
                 {step.label}
               </span>
-
               {isDone && (
-                <span className="text-[9px] font-bold uppercase tracking-widest text-green-400/60 shrink-0">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-500/80 shrink-0">
                   Done
                 </span>
               )}
@@ -258,15 +260,6 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
           );
         })}
       </div>
-
-      {/* Completion sparkle */}
-      {done && (
-        <div className="mt-6 flex items-center gap-2 text-lumina-400 anim-scale-bounce">
-          <Sparkles className="w-4 h-4" />
-          <span className="text-xs font-bold uppercase tracking-widest">Analysis Complete</span>
-          <Sparkles className="w-4 h-4" />
-        </div>
-      )}
     </div>
   );
 };

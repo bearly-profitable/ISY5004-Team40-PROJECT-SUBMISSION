@@ -32,7 +32,7 @@ export const GlassCarousel: React.FC<GlassCarouselProps> = ({
   const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set());
   const touchStartX = useRef(0);
   const touchDeltaX = useRef(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>();
+  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const resetTimer = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);

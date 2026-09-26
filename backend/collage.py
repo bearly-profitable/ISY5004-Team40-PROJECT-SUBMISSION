@@ -25,16 +25,42 @@ Flate and a three-page album ballooned to ~9 MB.
 from __future__ import annotations
 
 import io
+import json
 import math
-from dataclasses import dataclass, field
+import random
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Sequence
 
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 from reportlab.lib.colors import Color
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdfcanvas
+
+import mascot
+
+ASSETS = Path(__file__).resolve().parent / "assets"
+
+
+def _register_fonts() -> tuple[str, str, str]:
+    """Lumina's own type: Fraunces for display, Nunito for text (both SIL OFL,
+    in assets/fonts). Falls back to the PDF core fonts if they are missing."""
+    fonts = {"LumiDisplay": "Fraunces-SemiBold.ttf", "LumiBody": "Nunito-Regular.ttf",
+             "LumiBodyBold": "Nunito-ExtraBold.ttf"}
+    try:
+        for name, file in fonts.items():
+            if name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(name, str(ASSETS / "fonts" / file)))
+        return "LumiDisplay", "LumiBody", "LumiBodyBold"
+    except Exception:
+        return "Times-Roman", BODY, BODY_BOLD
+
+
+DISPLAY, BODY, BODY_BOLD = _register_fonts()
 
 # A4 landscape: album-shaped, prints anywhere.
 PAGE_W, PAGE_H = landscape(A4)
@@ -81,9 +107,11 @@ class Theme:
     display_serif: bool
     dark: bool
     #: Pure paper: no gradient, no glow, no grain, no drop shadow and square
-    #: corners. 小黑's style DNA forbids all of them (纯白背景，不要渐变、阴影、
-    #: 噪点), and a rounded card with a shadow is web furniture, not print.
+    #: corners — a rounded card with a shadow is web furniture, not print.
     flat: bool = False
+    #: Lumi's own look: photos printed on white rounded cards, pastel blobs in
+    #: the background, sparkles in the open space, plum-tinted shadows.
+    soft: bool = False
 
     @property
     def shadow_alpha(self) -> float:
@@ -93,7 +121,18 @@ class Theme:
 
     @property
     def radius(self) -> float:
-        return 0.0 if self.flat else CORNER_RADIUS
+        if self.flat:
+            return 0.0
+        return 14.0 if self.soft else CORNER_RADIUS
+
+    @property
+    def mat(self) -> float:
+        """Width of the white card a photo is printed on (0: no card)."""
+        return 4.5 if self.soft else 0.0
+
+    @property
+    def shadow_rgb(self) -> tuple[int, int, int]:
+        return (86, 52, 110) if self.soft else (0, 0, 0)
 
     @property
     def keyline(self) -> float:
@@ -102,6 +141,12 @@ class Theme:
 
 
 THEMES: dict[str, Theme] = {
+    # Lumi's palette: cream fading to lavender, rose accents, plum ink.
+    "lumi": Theme(
+        key="lumi", name="Lumi", bg_top="#fdf6f3", bg_bottom="#efe6f7",
+        ink="#3a2d4d", muted="#8e7ea3", accent="#d66f86", frame="#ecdff1",
+        grain=0.06, display_serif=True, dark=False, soft=True,
+    ),
     "midnight": Theme(
         key="midnight", name="Midnight", bg_top="#141824", bg_bottom="#070910",
         ink="#f4f6fb", muted="#8b95ac", accent="#d8b26a", frame="#2b3243",
@@ -127,15 +172,14 @@ THEMES: dict[str, Theme] = {
         ink="#eef4ef", muted="#87a094", accent="#9dc4a3", frame="#26362d",
         grain=0.42, display_serif=True, dark=True,
     ),
-    # Built for 小黑. Pure white, hairline rules, and an orange reserved for
-    # flow and annotation the way the style DNA uses it (橙色：主流程、路径).
+    # Pure white, hairline rules, and an orange accent kept for annotation.
     "paper": Theme(
         key="paper", name="Paper", bg_top="#ffffff", bg_bottom="#ffffff",
         ink="#141414", muted="#9a9a9a", accent="#e2542c", frame="#141414",
         grain=0.0, display_serif=False, dark=False, flat=True,
     ),
 }
-DEFAULT_THEME = "midnight"
+DEFAULT_THEME = "lumi"
 
 
 # Bento templates on a 12x12 unit grid, as (col, row, colspan, rowspan).
@@ -187,6 +231,9 @@ BENTO: dict[int, list[list[tuple[int, int, int, int]]]] = {
 }
 MAX_PER_PAGE = max(BENTO)
 GRID = 12
+#: Height of the Lumi that sits in the footer corner of a page of photos. The
+#: footer band is MARGIN + 12 tall; this fills it without touching the grid.
+STICKER_H = MARGIN + 8
 
 
 @dataclass
@@ -194,11 +241,9 @@ class CollagePhoto:
     path: Path
     caption: str = ""
     subcaption: str = ""
-    #: Stable id for this photo in the owning job. The PDF pass never needs it;
-    #: the viewer uses it to build a thumbnail URL.
+    #: Stable id for this photo in the owning job.
     photo_id: str = ""
-    #: True when ``path`` is an AI-enhanced render rather than the original
-    #: frame, so the viewer fetches the same picture the PDF embedded.
+    #: True when ``path`` is an AI-enhanced render rather than the original.
     enhanced: bool = False
     #: The event this photo belongs to. Consecutive photos sharing a chapter
     #: become one section of the album, announced by a divider page.
@@ -206,6 +251,9 @@ class CollagePhoto:
     #: Normalised [x1, y1, x2, y2] face boxes (0..1) for this photo, from the
     #: identity clustering. Used to keep faces inside the crop.
     faces: Sequence[tuple[float, float, float, float]] = ()
+    #: What the photo shows, as one of CLIP's zero-shot event labels ("Beach",
+    #: "Birthday", ...). Picks Lumi's pose on the page the photo lands on.
+    scene: str = ""
 
 
 @dataclass
@@ -216,7 +264,7 @@ class CastMember:
     path: Path
     #: Normalised [x1, y1, x2, y2] face box in ``path``, for the portrait crop.
     face: Optional[tuple[float, float, float, float]] = None
-    #: Id of ``path`` in the owning job, so the viewer can fetch the same frame.
+    #: Id of ``path`` in the owning job.
     photo_id: str = ""
 
 
@@ -230,26 +278,19 @@ class CollageSpec:
     stats: Sequence[tuple[str, str]] = ()
     #: When non-empty, the album opens with a page introducing these people.
     cast: Sequence[CastMember] = ()
-    #: 小黑 appears on the divider, cast and closing pages. Off by default so
-    #: existing albums are untouched.
+    #: Lumi appears on the divider and cast pages, and in the corner of every
+    #: page of photos. Off by default so existing albums are untouched.
     character: bool = False
-    #: Seeds the character's outline, so one album's 小黑 is consistent and two
-    #: albums' are not identical.
-    character_seed: int = 0
-    #: Which silhouette 小黑 wears — bean, cylinder, box, funnel or shadow.
-    character_body: str = "bean"
+    #: Lumi's colourway — a key of ``mascot.OUTFITS``.
+    character_outfit: str = "classic"
 
 
 # ---------------------------------------------------------------------------
 # Layout plan
 # ---------------------------------------------------------------------------
-# Geometry is solved once, up front, and both renderers consume the result: the
-# ReportLab pass below draws it to PDF, and ``plan_to_dict`` serialises it for
-# the in-app flip-book. One source of truth is the only way the album you page
-# through on screen stays the album that comes out of the printer.
-#
-# Plan coordinates run from the TOP-LEFT of the page, because that is what CSS
-# wants. The PDF pass flips y at draw time.
+# Geometry is solved once, up front, then the ReportLab pass below draws it.
+# Plan coordinates run from the TOP-LEFT of the page; the PDF pass flips y at
+# draw time.
 
 
 @dataclass(frozen=True)
@@ -268,6 +309,11 @@ class PlacedTile:
     #: Height of the image itself; equal to ``h`` when the tile is unlabelled.
     photo_h: float
 
+    #: A Lumi frame pose (see mascot.FRAME_POSES) the photo is held in, or "".
+    frame: str = ""
+    #: Printed as a tilted polaroid, at this angle in degrees; None if flat.
+    polaroid: Optional[float] = None
+
     @property
     def labelled(self) -> bool:
         return self.photo_h < self.h
@@ -275,16 +321,16 @@ class PlacedTile:
 
 @dataclass(frozen=True)
 class PlacedCharacter:
-    """Where 小黑 stands on a page, and what he is doing there."""
+    """Where Lumi stands on a page, and what Lumi is doing there."""
 
     pose: str
     x: float
     top: float
     w: float
     h: float
-    seed: int
-    facing: int = -1
-    body: str = "bean"
+    #: 1 as drawn; -1 mirrored, so Lumi can face into the page.
+    facing: int = 1
+    outfit: str = "classic"
 
 
 @dataclass(frozen=True)
@@ -300,13 +346,16 @@ class PlacedPortrait:
 
 @dataclass(frozen=True)
 class PlannedPage:
-    kind: str                       # "cover" | "bento" | "chapter" | "cast"
+    kind: str                       # "cover" | "bento" | "chapter" | "cast" | "closing"
     number: int                     # 1-based among content pages; 0 on the cover
     tiles: tuple[PlacedTile, ...]
     title: str = ""
     subtitle: str = ""
     character: Optional[PlacedCharacter] = None
     portraits: tuple[PlacedPortrait, ...] = ()
+    #: A photo shown as art on a divider (not one of the album's numbered
+    #: tiles): the chapter's opening shot, as a polaroid Lumi leans on.
+    feature: Optional[PlacedTile] = None
 
 
 @dataclass(frozen=True)
@@ -350,24 +399,30 @@ def _chapters(photos: Sequence[CollagePhoto]) -> list[tuple[str, list[CollagePho
     return runs
 
 
-#: Poses used on the divider pages, cycled so a long album does not repeat one.
-CHAPTER_POSES = ("carry", "hang", "point", "sweep")
-
-
-def _plan_chapter(spec: CollageSpec, label: str, count: int,
-                  number: int, index: int) -> PlannedPage:
-    """A divider: the chapter's name, its size, and 小黑 doing the moving."""
-    character = None
+def _plan_chapter(spec: CollageSpec, label: str, group: Sequence[CollagePhoto],
+                  number: int, index: int, first_photo: int) -> PlannedPage:
+    """A divider: the chapter's name and size, and Lumi dressed for the scene,
+    leaning on a polaroid of the chapter's opening photo."""
+    count = len(group)
+    character = feature = None
     if spec.character:
-        height = PAGE_H * 0.38
+        # The chapter's own label first; failing that, what its photos show.
+        pose = (mascot.pose_for_scene(label)
+                or mascot.pose_for_page((p.scene for p in group), index))
+        pw, ph = 236.0, 276.0
+        px = PAGE_W * 0.62 - pw / 2
+        ptop = (PAGE_H - ph) / 2 - 6
+        feature = PlacedTile(photo_index=first_photo, number=0, x=px, top=ptop,
+                             w=pw, h=ph, photo_h=ph,
+                             polaroid=-5.0 if index % 2 else 4.0)
+        height = PAGE_H * 0.44
         character = PlacedCharacter(
-            pose=CHAPTER_POSES[index % len(CHAPTER_POSES)],
-            body=spec.character_body,
-            w=height * 1.25,
+            pose=pose,
+            outfit=spec.character_outfit,
+            w=height,
             h=height,
-            x=PAGE_W - MARGIN - height * 1.25,
-            top=PAGE_H - (MARGIN + 34) - height,
-            seed=spec.character_seed + index * 17,
+            x=min(px + pw - height * 0.28, PAGE_W - MARGIN - height),
+            top=PAGE_H - (MARGIN + 14) - height,
             facing=-1,
         )
     return PlannedPage(
@@ -375,6 +430,22 @@ def _plan_chapter(spec: CollageSpec, label: str, count: int,
         title=label,
         subtitle=f"{count} photograph{'s' if count != 1 else ''}",
         character=character,
+        feature=feature,
+    )
+
+
+def _plan_closing(spec: CollageSpec, number: int) -> PlannedPage:
+    """The last page: Lumi hugging the album goodbye."""
+    height = PAGE_H * 0.6
+    return PlannedPage(
+        "closing", number, (),
+        title="That’s a wrap!",
+        subtitle=f"{len(spec.photos)} photograph{'s' if len(spec.photos) != 1 else ''}, "
+                 "curated by Lumi",
+        character=PlacedCharacter(
+            pose="hug", outfit=spec.character_outfit, w=height, h=height,
+            x=PAGE_W - MARGIN - height, top=(PAGE_H - height) / 2 + 10, facing=1,
+        ),
     )
 
 
@@ -390,8 +461,8 @@ def _plan_cast(spec: CollageSpec, number: int) -> PlannedPage:
         height = PAGE_H * 0.26
         char_w = height * 1.25
         character = PlacedCharacter(
-            pose="tag", body=spec.character_body, w=char_w, h=height, x=MARGIN,
-            top=PAGE_H * 0.40, seed=spec.character_seed + 101, facing=1,
+            pose="tag", outfit=spec.character_outfit, w=char_w, h=height, x=MARGIN,
+            top=PAGE_H * 0.40, facing=1,
         )
 
     per_row = min(len(members), 6)
@@ -425,8 +496,28 @@ def _plan_cast(spec: CollageSpec, number: int) -> PlannedPage:
     )
 
 
+def _plan_lumi_cover(spec: CollageSpec) -> PlannedPage:
+    """Lumi's cover: the first photo in Lumi's big hug on the right, and two
+    more as tilted polaroids beneath the title."""
+    tiles = []
+    box_x, box_top = PAGE_W * 0.5, MARGIN * 0.55
+    box_w, box_h = PAGE_W - box_x - MARGIN * 0.45, PAGE_H - MARGIN * 1.1
+    pose = "bighug" if "bighug" in mascot.frame_poses() else mascot.pick_frame(box_w, box_h)
+    if pose:
+        tiles.append(PlacedTile(photo_index=0, number=1, x=box_x, top=box_top,
+                                w=box_w, h=box_h, photo_h=box_h, frame=pose))
+    for i, (x, angle) in enumerate(((MARGIN + 4, -6.0), (MARGIN + 132, 5.0)), start=1):
+        if i < len(spec.photos):
+            tiles.append(PlacedTile(photo_index=i, number=i + 1, x=x,
+                                    top=PAGE_H - MARGIN - 162 - (8 if i == 2 else 0),
+                                    w=118, h=140, photo_h=140, polaroid=angle))
+    return PlannedPage("cover", 0, tuple(tiles))
+
+
 def _plan_cover(spec: CollageSpec) -> PlannedPage:
     """The cover's preview band: up to three photos in a staggered strip."""
+    if spec.character and mascot.frame_poses():
+        return _plan_lumi_cover(spec)
     previews = spec.photos[:3]
     if not previews:
         return PlannedPage("cover", 0, ())
@@ -475,6 +566,8 @@ def plan_album(spec: CollageSpec) -> AlbumPlan:
     counter = 1        # the photo's number, and its index into spec.photos + 1
     folio = 0          # printed page number: every page after the cover has one
     bento_index = 0    # drives template alternation, so dividers do not skew it
+    last_pose = None   # Lumi's pose on the previous page of photos
+    last_frame = None  # and the frame Lumi held its hero photo in
 
     if spec.cast:
         folio += 1
@@ -483,7 +576,8 @@ def plan_album(spec: CollageSpec) -> AlbumPlan:
     for chapter_index, (label, group) in enumerate(runs):
         if dividers and label:
             folio += 1
-            pages.append(_plan_chapter(spec, label, len(group), folio, chapter_index))
+            pages.append(_plan_chapter(spec, label, group, folio, chapter_index,
+                                       counter - 1))
 
         for batch in _chunk(group):
             folio += 1
@@ -509,78 +603,37 @@ def plan_album(spec: CollageSpec) -> AlbumPlan:
                         x=x, top=top, w=w, h=h_full, photo_h=photo_h,
                     ))
 
-            pages.append(PlannedPage("bento", folio, tuple(tiles), title=label))
+            if spec.character and tiles:
+                # The page's biggest photo is held by Lumi, in whichever frame
+                # shows it largest for that slot's shape.
+                hero = max(range(len(tiles)), key=lambda t: tiles[t].w * tiles[t].photo_h)
+                frame = mascot.pick_frame(tiles[hero].w, tiles[hero].photo_h, last_frame)
+                if frame:
+                    tiles[hero] = replace(tiles[hero], frame=frame)
+                    last_frame = frame
+
+            character = None
+            if spec.character:
+                # A small Lumi in the footer's empty right-hand corner, dressed
+                # for what this page's photos show.
+                pose = mascot.pose_for_page(
+                    [p.scene for p in batch], bento_index,
+                    fallback=label, avoid=last_pose)
+                last_pose = pose
+                character = PlacedCharacter(
+                    pose=pose, outfit=spec.character_outfit,
+                    x=PAGE_W - MARGIN - STICKER_H, top=PAGE_H - STICKER_H - 4,
+                    w=STICKER_H, h=STICKER_H, facing=-1,
+                )
+            pages.append(PlannedPage("bento", folio, tuple(tiles), title=label,
+                                     character=character))
             counter += len(batch)
 
+    if spec.character:
+        folio += 1
+        pages.append(_plan_closing(spec, folio))
+
     return AlbumPlan(spec=spec, theme=theme, pages=tuple(pages))
-
-
-def plan_to_dict(plan: AlbumPlan) -> dict:
-    """Serialise a plan for the viewer. Lengths stay in PDF points; the client
-    scales by (rendered width / page width), so one number drives the whole
-    layout and nothing has to be re-derived on the other side."""
-    spec, theme = plan.spec, plan.theme
-    return {
-        "title": spec.title,
-        "subtitle": spec.subtitle,
-        "footer": spec.footer,
-        "stats": [{"value": value, "label": label} for value, label in spec.stats],
-        "page": {
-            "width": PAGE_W, "height": PAGE_H, "margin": MARGIN,
-            "gutter": GUTTER, "cornerRadius": CORNER_RADIUS,
-            "captionHeight": CAPTION_H, "captionGap": CAPTION_GAP,
-            "coverStripBottom": COVER_STRIP_BOTTOM,
-        },
-        "theme": {
-            "key": theme.key, "name": theme.name,
-            "bgTop": theme.bg_top, "bgBottom": theme.bg_bottom,
-            "ink": theme.ink, "muted": theme.muted, "accent": theme.accent,
-            "frame": theme.frame, "grain": theme.grain,
-            "serif": theme.display_serif, "dark": theme.dark,
-            "shadowAlpha": theme.shadow_alpha, "flat": theme.flat,
-        },
-        "totalPages": plan.content_pages,
-        "pages": [
-            {
-                "kind": page.kind,
-                "number": page.number,
-                "pageTitle": page.title,
-                "pageSubtitle": page.subtitle,
-                "character": None if page.character is None else {
-                    "pose": page.character.pose,
-                    "body": page.character.body,
-                    "x": page.character.x, "top": page.character.top,
-                    "w": page.character.w, "h": page.character.h,
-                    "seed": page.character.seed, "facing": page.character.facing,
-                },
-                "portraits": [
-                    {
-                        "castIndex": portrait.cast_index,
-                        "name": portrait.name,
-                        "photoId": (spec.cast[portrait.cast_index].photo_id
-                                    if portrait.cast_index < len(spec.cast) else ""),
-                        "face": (list(spec.cast[portrait.cast_index].face or ())
-                                 if portrait.cast_index < len(spec.cast) else []),
-                        "x": portrait.x, "top": portrait.top, "size": portrait.size,
-                    }
-                    for portrait in page.portraits
-                ],
-                "tiles": [
-                    {
-                        "photoId": spec.photos[tile.photo_index].photo_id,
-                        "enhanced": spec.photos[tile.photo_index].enhanced,
-                        "number": tile.number,
-                        "x": tile.x, "top": tile.top, "w": tile.w, "h": tile.h,
-                        "photoH": tile.photo_h,
-                        "caption": spec.photos[tile.photo_index].caption,
-                        "subcaption": spec.photos[tile.photo_index].subcaption,
-                    }
-                    for tile in page.tiles
-                ],
-            }
-            for page in plan.pages
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +661,20 @@ def _gradient_background(theme: Theme, width: int, height: int) -> Image.Image:
     glow = glow.filter(ImageFilter.GaussianBlur(radius=max(width, height) * 0.12))
     tint = Image.new("RGB", (width, height), _rgb(theme.accent))
     img = Image.composite(Image.blend(img, tint, 0.15), img, glow)
+
+    if theme.soft:
+        # Lumi's colours drifting in from the corners: hood, body, and blush.
+        for colour, box, strength in (
+            ("#c9b8ee", (-0.18, -0.35, 0.34, 0.45), 120),
+            ("#f7c6d0", (0.72, 0.55, 1.2, 1.35), 120),
+            ("#fbd6bd", (0.55, -0.4, 1.05, 0.25), 90),
+        ):
+            blob = Image.new("L", (width, height), 0)
+            ImageDraw.Draw(blob).ellipse([int(box[0] * width), int(box[1] * height),
+                                          int(box[2] * width), int(box[3] * height)],
+                                         fill=strength)
+            blob = blob.filter(ImageFilter.GaussianBlur(radius=max(width, height) * 0.08))
+            img = Image.composite(Image.new("RGB", (width, height), _rgb(colour)), img, blob)
 
     if theme.grain > 0:
         import random
@@ -801,8 +868,8 @@ def _background_image(theme: Theme) -> Image.Image:
 
 def _display_font(theme: Theme, bold: bool = False) -> str:
     if theme.display_serif:
-        return "Times-Bold" if bold else "Times-Roman"
-    return "Helvetica-Bold" if bold else "Helvetica"
+        return DISPLAY
+    return BODY_BOLD
 
 
 def _fit(c: pdfcanvas.Canvas, text: str, font: str, size: float, max_w: float) -> str:
@@ -882,7 +949,8 @@ def _draw_tile(c: pdfcanvas.Canvas, theme: Theme, photo: CollagePhoto,
     Shadow, corners and photo are composited over a crop of the page background
     in Pillow, so a single opaque JPEG reaches the PDF.
     """
-    img = _cover_crop(photo.path, w, h, photo.faces)
+    mat = theme.mat
+    img = _cover_crop(photo.path, w - mat * 2, h - mat * 2, photo.faces)
     if img is None:
         return False
 
@@ -898,36 +966,44 @@ def _draw_tile(c: pdfcanvas.Canvas, theme: Theme, photo: CollagePhoto,
                     left + max(1, int(round(tile_w * px_per_pt))),
                     top + max(1, int(round(tile_h * px_per_pt))))).convert("RGB")
 
-    scale = img.width / max(w, 1e-6)
+    scale = img.width / max(w - mat * 2, 1e-6)
     tile = tile.resize(
         (max(1, round(tile_w * scale)), max(1, round(tile_h * scale))), Image.LANCZOS
     )
     inset = round(bleed * scale)
     radius_px = max(0, round(theme.radius * scale))
+    mat_px = round(mat * scale)
+    card_w, card_h = img.width + mat_px * 2, img.height + mat_px * 2
 
     if theme.shadow_alpha > 0:
         drop = round(bleed * scale * 0.4)
         shadow = Image.new("L", tile.size, 0)
         ImageDraw.Draw(shadow).rounded_rectangle(
-            [inset, inset + drop, inset + img.width - 1, inset + img.height - 1 + drop],
+            [inset, inset + drop, inset + card_w - 1, inset + card_h - 1 + drop],
             radius=max(1, radius_px), fill=round(255 * theme.shadow_alpha),
         )
         shadow = shadow.filter(
             ImageFilter.GaussianBlur(radius=max(1.0, bleed * scale * 0.42))
         )
-        tile = Image.composite(Image.new("RGB", tile.size, (0, 0, 0)), tile, shadow)
+        tile = Image.composite(Image.new("RGB", tile.size, theme.shadow_rgb), tile, shadow)
 
-    tile.paste(img, (inset, inset),
+    if mat_px:
+        # The Lumi theme prints each photo on a white rounded card.
+        tile.paste(Image.new("RGB", (card_w, card_h), (255, 253, 251)), (inset, inset),
+                   _rounded_mask((card_w, card_h), radius_px))
+        radius_px = max(0, radius_px - mat_px)
+    tile.paste(img, (inset + mat_px, inset + mat_px),
                _rounded_mask(img.size, radius_px) if radius_px else None)
 
     _draw_image(c, _jpeg_reader(tile), tile_x, tile_y, tile_w, tile_h)
 
-    c.setStrokeColor(_hex(theme.frame, 1.0 if theme.flat else 0.7))
-    c.setLineWidth(theme.keyline)
-    if theme.radius:
-        c.roundRect(x, y, w, h, theme.radius, stroke=1, fill=0)
-    else:
-        c.rect(x, y, w, h, stroke=1, fill=0)
+    if not theme.soft:
+        c.setStrokeColor(_hex(theme.frame, 1.0 if theme.flat else 0.7))
+        c.setLineWidth(theme.keyline)
+        if theme.radius:
+            c.roundRect(x, y, w, h, theme.radius, stroke=1, fill=0)
+        else:
+            c.rect(x, y, w, h, stroke=1, fill=0)
     return True
 
 
@@ -939,21 +1015,21 @@ def _draw_tile_label(c: pdfcanvas.Canvas, theme: Theme, photo: CollagePhoto,
 
     num = f"{index:02d}"
     c.setFillColor(_hex(theme.accent, 0.9))
-    c.setFont("Helvetica-Bold", 6.0)
+    c.setFont(BODY_BOLD, 6.0)
     c.drawString(x + 1.0, y + CAPTION_H - 9.0, num)
-    num_w = c.stringWidth(num, "Helvetica-Bold", 6.0) + 5.0
+    num_w = c.stringWidth(num, BODY_BOLD, 6.0) + 5.0
 
     avail = max(8.0, w - num_w - 2.0)
     if photo.caption:
         c.setFillColor(_hex(theme.ink, 0.92))
-        c.setFont("Helvetica-Bold", 7.3)
+        c.setFont(BODY_BOLD, 7.3)
         c.drawString(x + num_w, y + CAPTION_H - 9.0,
-                     _fit(c, photo.caption, "Helvetica-Bold", 7.3, avail))
+                     _fit(c, photo.caption, BODY_BOLD, 7.3, avail))
     if photo.subcaption:
         c.setFillColor(_hex(theme.muted, 0.95))
-        c.setFont("Helvetica", 6.3)
+        c.setFont(BODY, 6.3)
         c.drawString(x + num_w, y + CAPTION_H - 17.0,
-                     _fit(c, photo.subcaption, "Helvetica", 6.3, avail))
+                     _fit(c, photo.subcaption, BODY, 6.3, avail))
 
 
 def _draw_cover(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
@@ -967,12 +1043,12 @@ def _draw_cover(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
     # --- masthead -------------------------------------------------------
     c.setFillColor(_hex(theme.accent))
     c.circle(MARGIN + 2.5, top - 17, 2.5, stroke=0, fill=1)
-    _tracked(c, "LUMINA", MARGIN + 12, top - 19.5, "Helvetica-Bold", 7.6, 2.8)
+    _tracked(c, "LUMINA", MARGIN + 12, top - 19.5, BODY_BOLD, 7.6, 2.8)
 
     c.setFillColor(_hex(theme.muted, 0.85))
     right_label = "PHOTO ALBUM"
-    w_right = _tracked_width(c, right_label, "Helvetica", 6.8, 1.9)
-    _tracked(c, right_label, PAGE_W - MARGIN - w_right, top - 19.5, "Helvetica", 6.8, 1.9)
+    w_right = _tracked_width(c, right_label, BODY, 6.8, 1.9)
+    _tracked(c, right_label, PAGE_W - MARGIN - w_right, top - 19.5, BODY, 6.8, 1.9)
 
     c.setStrokeColor(_hex(theme.accent, 0.55))
     c.setLineWidth(0.8)
@@ -995,7 +1071,7 @@ def _draw_cover(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
 
     if spec.subtitle:
         c.setFillColor(_hex(theme.muted))
-        _tracked(c, spec.subtitle.upper()[:74], MARGIN, y - 3, "Helvetica", 7.6, 1.9)
+        _tracked(c, spec.subtitle.upper()[:74], MARGIN, y - 3, BODY, 7.6, 1.9)
         y -= 14
 
     # --- bento preview strip + stat rail --------------------------------
@@ -1016,8 +1092,8 @@ def _draw_cover(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
             c.drawString(cursor, rail_y + 4, value)
             vw = c.stringWidth(value, bold, 14.5)
             c.setFillColor(_hex(theme.muted))
-            lw = _tracked_width(c, label.upper(), "Helvetica", 6.1, 1.6)
-            _tracked(c, label.upper(), cursor, rail_y - 6, "Helvetica", 6.1, 1.6)
+            lw = _tracked_width(c, label.upper(), BODY, 6.1, 1.6)
+            _tracked(c, label.upper(), cursor, rail_y - 6, BODY, 6.1, 1.6)
             cursor += max(vw, lw) + 26
 
     # Accent rule anchored right, aligned with the rail.
@@ -1041,16 +1117,341 @@ def _draw_cover(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
            PAGE_W - MARGIN + m, PAGE_H - MARGIN + m)
 
 
+# ---------------------------------------------------------------------------
+# Lumi's art: composites, frames, polaroids and sparkles
+# ---------------------------------------------------------------------------
+# Everything with transparency (Lumi, a tilted polaroid, a soft shadow) is
+# layered in Pillow over its own patch of page background, then reaches the
+# PDF as one opaque JPEG, like every other image here.
+
+def _px(points: float) -> int:
+    return max(1, int(round(points / 72.0 * TARGET_DPI)))
+
+
+def _pt(pixels: float) -> float:
+    return pixels * 72.0 / TARGET_DPI
+
+
+def _paste(canvas: Image.Image, img: Image.Image, ox: int, oy: int) -> None:
+    """alpha_composite that tolerates layers hanging off the canvas edge."""
+    x0, y0 = max(0, ox), max(0, oy)
+    x1, y1 = min(canvas.width, ox + img.width), min(canvas.height, oy + img.height)
+    if x1 > x0 and y1 > y0:
+        canvas.alpha_composite(img.crop((x0 - ox, y0 - oy, x1 - ox, y1 - oy)), dest=(x0, y0))
+
+
+def _shadow(theme: Theme, img: Image.Image) -> Optional[tuple[Image.Image, int]]:
+    """A soft shadow in the layer's own shape, as (layer, padding)."""
+    if theme.shadow_alpha <= 0:
+        return None
+    blur = _px(5.0)
+    pad = blur * 3
+    strength = min(1.0, theme.shadow_alpha * 1.8)
+    alpha = img.getchannel("A").point(lambda v: int(v * strength))
+    big = Image.new("L", (img.width + pad * 2, img.height + pad * 2), 0)
+    big.paste(alpha, (pad, pad))
+    layer = Image.new("RGBA", big.size, theme.shadow_rgb + (0,))
+    layer.putalpha(big.filter(ImageFilter.GaussianBlur(blur)))
+    return layer, pad
+
+
+def _compose(c: pdfcanvas.Canvas, theme: Theme,
+             rect: tuple[float, float, float, float],
+             layers: Sequence[tuple[Image.Image, float, float, bool]]) -> None:
+    """Draw `layers` of (image, x, top, casts a shadow) over the page, clipped
+    to `rect` (x, top, w, h in points from the top-left)."""
+    x, top, w, h = rect
+    canvas = _plate(theme, x, top, w, h, _px(w), _px(h)).convert("RGBA")
+    for img, lx, ltop, casts in layers:
+        ox = round((lx - x) / 72.0 * TARGET_DPI)
+        oy = round((ltop - top) / 72.0 * TARGET_DPI)
+        shadow = _shadow(theme, img) if casts else None
+        if shadow:
+            layer, pad = shadow
+            _paste(canvas, layer, ox - pad, oy - pad + _px(3.0))
+        _paste(canvas, img, ox, oy)
+    _draw_image(c, _jpeg_reader(canvas), x, PAGE_H - top - h, w, h)
+
+
+def _frame_layer(theme: Theme, photo: CollagePhoto, pose: str, box_w: float, box_h: float,
+                 outfit: str) -> Optional[tuple[Image.Image, float, float]]:
+    """The photo held in a Lumi frame, as (RGBA, drawn width, drawn height)
+    fitted inside a box. Lumi is drawn over the photo, paws and all."""
+    meta = mascot.frame_meta().get(pose)
+    if not meta:
+        return None
+    scale, dw, dh = mascot.frame_fit(pose, box_w, box_h)
+    x0, y0, x1, y1 = meta["window"]
+    out_w, out_h = _px(dw), _px(dh)
+    k = out_w / meta["size"][0]
+    # The sprite's card edge was cleared a few pixels wide; grow into it.
+    grow = max(1, round(5 * k))
+    win = (round(x0 * k) - grow, round(y0 * k) - grow,
+           round(x1 * k) + grow, round(y1 * k) + grow)
+    window = Image.new("L", (out_w, out_h), 0)
+    ImageDraw.Draw(window).polygon([(px * k, py * k) for px, py in meta["polygon"]], fill=255)
+    window = window.filter(ImageFilter.MaxFilter(grow * 2 + 1))
+
+    # On the Lumi theme the photo is printed on a white rounded card, like
+    # every other photo in the album; Lumi holds the card.
+    mat = _px(theme.mat) if theme.mat else 0
+    card_w, card_h = win[2] - win[0], win[3] - win[1]
+    img = _cover_crop(photo.path, _pt(card_w - mat * 2), _pt(card_h - mat * 2), photo.faces)
+    if img is None:
+        return None
+    img = img.resize((card_w - mat * 2, card_h - mat * 2), Image.LANCZOS)
+    card = Image.new("RGBA", (card_w, card_h), (255, 253, 251, 255) if mat else (0, 0, 0, 0))
+    radius = _px(theme.radius) if theme.radius else 0
+    card.paste(img, (mat, mat), _rounded_mask(img.size, max(0, radius - mat)) if radius else None)
+    if radius:
+        card.putalpha(ImageChops.multiply(card.getchannel("A"),
+                                          _rounded_mask(card.size, radius)))
+    photo_layer = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+    photo_layer.paste(card, win[:2])
+    layer = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+    layer.paste(photo_layer, (0, 0), ImageChops.multiply(window, photo_layer.getchannel("A")))
+    sprite = mascot.frame_sprite(pose).resize((out_w, out_h), Image.LANCZOS)
+    layer.alpha_composite(mascot._recolour(sprite, outfit))
+    return layer, dw, dh
+
+
+def _draw_framed(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
+                 tile: PlacedTile) -> bool:
+    """A photo held by Lumi, centred in its slot."""
+    photo = spec.photos[tile.photo_index]
+    made = _frame_layer(theme, photo, tile.frame, tile.w, tile.photo_h, spec.character_outfit)
+    if made is None:
+        return False
+    layer, dw, dh = made
+    lx = tile.x + (tile.w - dw) / 2
+    ltop = tile.top + (tile.photo_h - dh) / 2
+    bleed = SHADOW_BLEED
+    _compose(c, theme, (tile.x - bleed, tile.top - bleed, tile.w + bleed * 2,
+                        tile.photo_h + bleed * 2), [(layer, lx, ltop, True)])
+    return True
+
+
+def _polaroid_layer(theme: Theme, photo: CollagePhoto, w: float, h: float,
+                    angle: float) -> Optional[Image.Image]:
+    """A white instant print with a strip of washi tape, tilted by `angle`."""
+    W, H = _px(w), _px(h)
+    side, bottom = round(W * 0.07), round(H * 0.19)
+    img = _cover_crop(photo.path, _pt(W - side * 2), _pt(H - side - bottom), photo.faces)
+    if img is None:
+        return None
+    tape_h = round(H * 0.09)
+    card = Image.new("RGBA", (W, H + tape_h), (0, 0, 0, 0))
+    body = Image.new("RGBA", (W, H), (255, 253, 251, 255))
+    body.paste(img.resize((W - side * 2, H - side - bottom), Image.LANCZOS), (side, side))
+    body.putalpha(_rounded_mask((W, H), round(W * 0.02)))
+    card.alpha_composite(body, dest=(0, tape_h // 2))
+    # Washi tape: translucent, in the theme's accent, slightly askew.
+    tape = Image.new("RGBA", (round(W * 0.42), tape_h), _rgb(theme.accent) + (150,))
+    tape = tape.rotate(-3, resample=Image.BICUBIC, expand=True)
+    card.alpha_composite(tape, dest=((W - tape.width) // 2, 0))
+    return card.rotate(angle, resample=Image.BICUBIC, expand=True)
+
+
+def _centred_on(tile: PlacedTile, img: Image.Image) -> tuple[float, float]:
+    """Top-left, in points, that keeps a (rotated) image centred on its tile."""
+    return tile.x + tile.w / 2 - _pt(img.width) / 2, tile.top + tile.h / 2 - _pt(img.height) / 2
+
+
+def _lumi_layer(placed: PlacedCharacter) -> Image.Image:
+    return mascot.render(placed.pose, _px(placed.w), _px(placed.h), placed.outfit,
+                         placed.facing)
+
+
+def _layers_rect(layers: Sequence[tuple[Image.Image, float, float, bool]],
+                 pad: float = 14.0) -> tuple[float, float, float, float]:
+    """The rectangle (x, top, w, h) that holds every layer and its shadow."""
+    x0 = min(lx for _, lx, _, _ in layers) - pad
+    t0 = min(lt for _, _, lt, _ in layers) - pad
+    x1 = max(lx + _pt(img.width) for img, lx, _, _ in layers) + pad
+    t1 = max(lt + _pt(img.height) for img, _, lt, _ in layers) + pad
+    x0, t0 = max(0.0, x0), max(0.0, t0)
+    return x0, t0, min(PAGE_W, x1) - x0, min(PAGE_H, t1) - t0
+
+
+def _draw_sparkles(c: pdfcanvas.Canvas, theme: Theme, seed: int, count: int,
+                   avoid: Sequence[tuple[float, float, float, float]]) -> None:
+    """Little four-point sparkles and dots, in the open space of a page."""
+    if not theme.soft:
+        return
+    rnd = random.Random(seed)
+    colours = [theme.accent, "#a996d6", "#f3ad7f", "#c4b4e6"]
+    pad = 10.0
+    placed = tries = 0
+    while placed < count and tries < count * 60:
+        tries += 1
+        x = rnd.uniform(MARGIN * 0.45, PAGE_W - MARGIN * 0.45)
+        top = rnd.uniform(MARGIN * 0.9, PAGE_H - MARGIN * 0.8)
+        if any(ax - pad < x < ax + aw + pad and at - pad < top < at + ah + pad
+               for ax, at, aw, ah in avoid):
+            continue
+        placed += 1
+        y = PAGE_H - top
+        c.setFillColor(_hex(rnd.choice(colours), rnd.uniform(0.45, 0.85)))
+        if rnd.random() < 0.55:
+            r = rnd.uniform(3.5, 8.5)
+            path = c.beginPath()
+            path.moveTo(x, y + r)
+            path.curveTo(x, y, x, y, x + r, y)
+            path.curveTo(x, y, x, y, x, y - r)
+            path.curveTo(x, y, x, y, x - r, y)
+            path.curveTo(x, y, x, y, x, y + r)
+            path.close()
+            c.drawPath(path, stroke=0, fill=1)
+        else:
+            c.circle(x, y, rnd.uniform(1.2, 2.6), stroke=0, fill=1)
+
+
+def _chip(c: pdfcanvas.Canvas, theme: Theme, text: str, x: float, y: float,
+          size: float = 7.0) -> float:
+    """A small rounded label; returns its width."""
+    w = _tracked_width(c, text, BODY_BOLD, size, 1.4) + 18
+    c.setFillColor(_hex(theme.accent, 0.13))
+    c.roundRect(x, y - 6, w, size + 11, (size + 11) / 2, stroke=0, fill=1)
+    c.setFillColor(_hex(theme.accent))
+    _tracked(c, text, x + 9, y, BODY_BOLD, size, 1.4)
+    return w
+
+
+def _draw_lumi_cover(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
+                     page: PlannedPage) -> None:
+    """Title on the left, the first photo in Lumi's hug on the right, and two
+    more as polaroids taped beneath the title."""
+    _draw_background(c, theme)
+    col_w = PAGE_W * 0.45 - MARGIN
+
+    hero = next((t for t in page.tiles if t.frame), None)
+    prints = [t for t in page.tiles if t.polaroid is not None]
+    avoid = [(MARGIN - 6, MARGIN - 6, col_w + 12, 250)]
+    if hero:
+        avoid.append((hero.x, hero.top, hero.w, hero.h))
+    if prints:
+        avoid.append((MARGIN - 24, prints[0].top - 30, 300, 215))
+    _draw_sparkles(c, theme, 7, 18, avoid)
+
+    top = PAGE_H - MARGIN - 14
+    _chip(c, theme, "LUMINA  ·  PHOTO ALBUM", MARGIN, top)
+
+    size = 50.0
+    while size > 24 and len(_wrap(c, spec.title, DISPLAY, size, col_w, 3)) > 2:
+        size -= 2.0
+    y = top - 22 - size
+    c.setFillColor(_hex(theme.ink))
+    for line in _wrap(c, spec.title, DISPLAY, size, col_w, 3):
+        c.setFont(DISPLAY, size)
+        c.drawString(MARGIN, y, line)
+        y -= size * 1.06
+    # The default subtitle ("12 photos") only repeats the first stat pill.
+    repeats_a_stat = any(spec.subtitle == f"{v} {l}" for v, l in spec.stats)
+    if spec.subtitle and not repeats_a_stat:
+        c.setFillColor(_hex(theme.muted))
+        c.setFont(BODY, 11.5)
+        c.drawString(MARGIN, y + 4, _fit(c, spec.subtitle, BODY, 11.5, col_w))
+        y -= 22
+
+    cursor = MARGIN
+    for value, label in spec.stats:
+        vw = c.stringWidth(value, DISPLAY, 15)
+        lw = c.stringWidth(label, BODY_BOLD, 8)
+        pill_w = vw + lw + 26
+        # White pills on light pages; the theme's frame colour on dark ones,
+        # where the ink is pale.
+        c.setFillColor(_hex(theme.frame if theme.dark else "#ffffff", 0.92))
+        c.setStrokeColor(_hex(theme.frame))
+        c.setLineWidth(0.8)
+        c.roundRect(cursor, y - 14, pill_w, 26, 13, stroke=1, fill=1)
+        c.setFillColor(_hex(theme.ink))
+        c.setFont(DISPLAY, 15)
+        c.drawString(cursor + 11, y - 7, value)
+        c.setFillColor(_hex(theme.muted))
+        c.setFont(BODY_BOLD, 8)
+        c.drawString(cursor + 15 + vw, y - 5.5, label)
+        cursor += pill_w + 8
+
+    layers = []
+    for tile in prints:
+        img = _polaroid_layer(theme, spec.photos[tile.photo_index], tile.w, tile.h,
+                              tile.polaroid or 0.0)
+        if img is not None:
+            layers.append((img, *_centred_on(tile, img), True))
+    if layers:
+        _compose(c, theme, _layers_rect(layers), layers)
+
+    if hero:
+        _draw_framed(c, theme, spec, replace(hero, photo_h=hero.h))
+
+
+def _draw_chapter_art(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
+                      page: PlannedPage) -> None:
+    """The chapter's opening photo as a polaroid, with Lumi leaning on it."""
+    layers = []
+    tile = page.feature
+    if tile is not None:
+        img = _polaroid_layer(theme, spec.photos[tile.photo_index], tile.w, tile.h,
+                              tile.polaroid or 0.0)
+        if img is not None:
+            layers.append((img, *_centred_on(tile, img), True))
+    if page.character:
+        placed = page.character
+        try:
+            layers.append((_lumi_layer(placed), placed.x, placed.top, True))
+        except Exception:
+            pass                   # a missing sprite never fails an export
+    if layers:
+        _compose(c, theme, _layers_rect(layers), layers)
+
+
+def _draw_closing(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
+                  page: PlannedPage, total: int) -> None:
+    """Lumi hugging the album goodbye."""
+    _draw_background(c, theme)
+    art = page.character
+    avoid = [(MARGIN - 6, PAGE_H * 0.3, PAGE_W * 0.5, PAGE_H * 0.4)]
+    if art:
+        avoid.append((art.x, art.top, art.w, art.h))
+    _draw_sparkles(c, theme, 97, 22, avoid)
+    y = _draw_display_heading(c, theme, page.title, page.subtitle, top=PAGE_H * 0.42,
+                              measure=(PAGE_W - MARGIN * 2) * 0.5)
+    c.setFillColor(_hex(theme.ink, 0.8))
+    c.setFont(BODY, 11)
+    c.drawString(MARGIN, y - 44, "Thank you for letting Lumi look after your photos.")
+    if art:
+        try:
+            _compose(c, theme, (art.x - 14, art.top - 14, art.w + 28, art.h + 28),
+                     [(_lumi_layer(art), art.x, art.top, True)])
+        except Exception:
+            pass
+
+
 def _draw_page_chrome(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
                       page_no: int, total_pages: int) -> None:
     top = PAGE_H - MARGIN
-    c.setFillColor(_hex(theme.muted, 0.9))
-    _tracked(c, spec.title.upper()[:56], MARGIN, top - 7, "Helvetica", 6.6, 1.6)
-
     label = f"{page_no:02d} / {total_pages:02d}"
+
+    if theme.soft:
+        # Lumi's pages: the album name in a soft chip, the page in a pill, no rule.
+        _chip(c, theme, spec.title.upper()[:48], MARGIN, top - 8, 6.4)
+        w = _tracked_width(c, label, BODY_BOLD, 6.6, 1.2) + 16
+        c.setFillColor(_hex("#ffffff", 0.85))
+        c.roundRect(PAGE_W - MARGIN - w, top - 13, w, 16, 8, stroke=0, fill=1)
+        c.setFillColor(_hex(theme.accent))
+        _tracked(c, label, PAGE_W - MARGIN - w + 8, top - 8, BODY_BOLD, 6.6, 1.2)
+        footer = "Curated by Lumi" if spec.character else spec.footer
+        if footer:
+            c.setFillColor(_hex(theme.muted, 0.85))
+            _tracked(c, footer.upper(), MARGIN, MARGIN * 0.44, BODY_BOLD, 5.8, 1.3)
+        return
+
+    c.setFillColor(_hex(theme.muted, 0.9))
+    _tracked(c, spec.title.upper()[:56], MARGIN, top - 7, BODY, 6.6, 1.6)
+
     c.setFillColor(_hex(theme.accent))
-    w = _tracked_width(c, label, "Helvetica-Bold", 6.6, 1.4)
-    _tracked(c, label, PAGE_W - MARGIN - w, top - 7, "Helvetica-Bold", 6.6, 1.4)
+    w = _tracked_width(c, label, BODY_BOLD, 6.6, 1.4)
+    _tracked(c, label, PAGE_W - MARGIN - w, top - 7, BODY_BOLD, 6.6, 1.4)
 
     c.setStrokeColor(_hex(theme.frame, 0.85))
     c.setLineWidth(0.5)
@@ -1058,7 +1459,7 @@ def _draw_page_chrome(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
 
     if spec.footer:
         c.setFillColor(_hex(theme.muted, 0.75))
-        _tracked(c, spec.footer.upper(), MARGIN, MARGIN * 0.44, "Helvetica", 5.8, 1.3)
+        _tracked(c, spec.footer.upper(), MARGIN, MARGIN * 0.44, BODY, 5.8, 1.3)
 
 
 def _plate(theme: Theme, x: float, top: float, w: float, h: float,
@@ -1084,22 +1485,12 @@ def _plate(theme: Theme, x: float, top: float, w: float, h: float,
 
 def _draw_character(c: pdfcanvas.Canvas, theme: Theme,
                     placed: PlacedCharacter) -> None:
-    """Draw 小黑, in the page's ink.
-
-    On a dark theme a solid black character would simply disappear, so he is
-    drawn in the theme's ink instead — pale on Midnight, near-black on Paper.
-    The silhouette is what identifies him, not the colour.
-    """
-    import xiaohei
-
+    """Draw Lumi. Lumi is full colour, so the same sprite
+    reads on every theme, dark ones included."""
     px_w = max(1, int(placed.w / 72.0 * TARGET_DPI))
     px_h = max(1, int(placed.h / 72.0 * TARGET_DPI))
     try:
-        # The eyes are holes in the body, so they take the page colour: white
-        # on Paper, near-black on Midnight where 小黑 himself is pale.
-        art = xiaohei.cached(placed.pose, placed.body, px_w, px_h,
-                             placed.seed, _rgb(theme.ink), placed.facing,
-                             _rgb(theme.bg_top))
+        art = mascot.render(placed.pose, px_w, px_h, placed.outfit, placed.facing)
     except Exception:
         return                      # a missing character never fails an export
 
@@ -1154,9 +1545,9 @@ def _draw_portrait(c: pdfcanvas.Canvas, theme: Theme, member: CastMember,
     c.circle(placed.x + placed.size / 2, y + placed.size / 2, placed.size / 2,
              stroke=1, fill=0)
 
-    name = _fit(c, placed.name, "Helvetica-Bold", 7.4, placed.size + 12)
+    name = _fit(c, placed.name, BODY_BOLD, 7.4, placed.size + 12)
     c.setFillColor(_hex(theme.ink, 0.92))
-    c.setFont("Helvetica-Bold", 7.4)
+    c.setFont(BODY_BOLD, 7.4)
     c.drawCentredString(placed.x + placed.size / 2, y - 13, name)
 
 
@@ -1181,21 +1572,27 @@ def _draw_display_heading(c: pdfcanvas.Canvas, theme: Theme, title: str,
 
     if subtitle:
         c.setFillColor(_hex(theme.muted))
-        _tracked(c, subtitle.upper(), MARGIN, y - 21, "Helvetica", 7.0, 1.8)
+        _tracked(c, subtitle.upper(), MARGIN, y - 21, BODY, 7.0, 1.8)
     return y
 
 
 def _draw_chapter(c: pdfcanvas.Canvas, theme: Theme, spec: CollageSpec,
                   page: PlannedPage, total: int) -> None:
     """A divider. Mostly empty, which is the point — it is a breath between
-    two events, and 小黑 is the one carrying the album across the gap."""
+    two events, and Lumi, dressed for the next one, introduces it."""
     _draw_background(c, theme)
     _draw_page_chrome(c, theme, spec, page.number, total)
 
-    if page.character:
+    if page.feature is not None:
+        _draw_sparkles(c, theme, page.number * 31, 14, [
+            (MARGIN - 6, PAGE_H * 0.3, PAGE_W * 0.36, PAGE_H * 0.3),
+            (page.feature.x - 40, MARGIN, PAGE_W - page.feature.x + 40, PAGE_H - MARGIN * 2),
+        ])
+        _draw_chapter_art(c, theme, spec, page)
+    elif page.character:
         _draw_character(c, theme, page.character)
 
-    measure = (PAGE_W - MARGIN * 2) * (0.48 if page.character else 0.76)
+    measure = (PAGE_W - MARGIN * 2) * (0.4 if page.feature else 0.48 if page.character else 0.76)
     _draw_display_heading(c, theme, page.title, page.subtitle,
                           top=PAGE_H * 0.42, measure=measure)
 
@@ -1231,7 +1628,12 @@ def build_collage_pdf(spec: CollageSpec) -> bytes:
 
     for page in plan.pages:
         if page.kind == "cover":
-            _draw_cover(c, theme, spec, page)
+            if spec.character and any(t.frame for t in page.tiles):
+                _draw_lumi_cover(c, theme, spec, page)
+            else:
+                _draw_cover(c, theme, spec, page)
+        elif page.kind == "closing":
+            _draw_closing(c, theme, spec, page, total)
         elif page.kind == "chapter":
             _draw_chapter(c, theme, spec, page, total)
         elif page.kind == "cast":
@@ -1239,13 +1641,18 @@ def build_collage_pdf(spec: CollageSpec) -> bytes:
         else:
             _draw_background(c, theme)
             _draw_page_chrome(c, theme, spec, page.number, total)
-            for tile in page.tiles:
+            # Lumi's framed photo first: its shadow may reach into the gutter,
+            # and the neighbouring tiles should sit cleanly over that.
+            for tile in sorted(page.tiles, key=lambda t: not t.frame):
                 photo = spec.photos[tile.photo_index]
-                _draw_tile(c, theme, photo, tile.x,
-                           PAGE_H - tile.top - tile.photo_h, tile.w, tile.photo_h)
+                if not (tile.frame and _draw_framed(c, theme, spec, tile)):
+                    _draw_tile(c, theme, photo, tile.x,
+                               PAGE_H - tile.top - tile.photo_h, tile.w, tile.photo_h)
                 if tile.labelled:
                     _draw_tile_label(c, theme, photo, tile.number,
                                      tile.x, PAGE_H - tile.top - tile.h, tile.w)
+            if page.character:
+                _draw_character(c, theme, page.character)
         c.showPage()
 
     c.save()

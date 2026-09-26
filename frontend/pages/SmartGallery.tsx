@@ -8,7 +8,6 @@ import {
   applyCorrection,
   deleteEnhanced,
   downloadCollage,
-  fetchAlbumPlan,
   enhancePhoto,
   enhancedPhotoUrl,
   exportAlbum,
@@ -20,9 +19,8 @@ import {
   submitFeedback,
 } from '../lib/analysisApi';
 import type {
-  AlbumPlan, CharacterBody, CollageOptions, CollageTheme, EnhanceStyle,
+  CharacterOutfit, CollageOptions, CollageTheme, EnhanceStyle,
 } from '../lib/analysisApi';
-import AlbumViewer from '../components/AlbumViewer';
 import {
   Sparkles,
   Trash2,
@@ -52,9 +50,12 @@ import {
   Pin,
   ScanFace,
   FileText,
-  BookOpen,
   Undo2,
 } from 'lucide-react';
+import { Lumi, lumiSrc } from '../components/Lumi';
+import { poseForEvent } from '../lib/lumiScenes';
+import { FALLBACK_CHARACTER_OUTFITS, FALLBACK_COLLAGE_THEMES } from '../lib/collageCatalog';
+import { useAuth } from '../lib/auth';
 
 /* ------------------------------------------------
    Enhancement state, shared with the cards
@@ -94,75 +95,6 @@ const useEnhance = () => React.useContext(EnhanceContext);
 /** Albums use the balanced MMR picks: quality with enough variety to fill a page. */
 const ALBUM_MMR_MODE: MmrMode = 'balanced';
 
-/** Mirrors backend/xiaohei.py BODIES, for when the themes fetch fails. */
-const FALLBACK_CHARACTER_BODIES: CharacterBody[] = [
-  { key: 'bean', name: 'Bean' },
-  { key: 'cylinder', name: 'Cylinder' },
-  { key: 'box', name: 'Box' },
-  { key: 'funnel', name: 'Funnel' },
-  { key: 'shadow', name: 'Shadow' },
-];
-
-/** Mirrors backend/collage.py THEMES so the picker and the viewer still work
- *  if the fetch fails. Keep in step with the server; it is the source. */
-const FALLBACK_COLLAGE_THEMES: CollageTheme[] = [
-  {
-    key: 'midnight', name: 'Midnight', dark: true, serif: true,
-    swatch: ['#141824', '#d8b26a', '#f4f6fb'],
-    bgTop: '#141824', bgBottom: '#070910', ink: '#f4f6fb', muted: '#8b95ac',
-    accent: '#d8b26a', frame: '#2b3243', grain: 0.5, shadowAlpha: 0.4, flat: false,
-  },
-  {
-    key: 'ivory', name: 'Ivory', dark: false, serif: true,
-    swatch: ['#fcfaf7', '#b0814f', '#1b1a18'],
-    bgTop: '#fcfaf7', bgBottom: '#efe9df', ink: '#1b1a18', muted: '#8c8478',
-    accent: '#b0814f', frame: '#e2dacd', grain: 0.2, shadowAlpha: 0.16, flat: false,
-  },
-  {
-    key: 'blush', name: 'Blush', dark: false, serif: false,
-    swatch: ['#fdf3f2', '#d97b8c', '#40282d'],
-    bgTop: '#fdf3f2', bgBottom: '#f6dfe4', ink: '#40282d', muted: '#a57883',
-    accent: '#d97b8c', frame: '#f1d1d7', grain: 0.16, shadowAlpha: 0.16, flat: false,
-  },
-  {
-    key: 'mono', name: 'Mono', dark: false, serif: false,
-    swatch: ['#ffffff', '#0a0a0a', '#0a0a0a'],
-    bgTop: '#ffffff', bgBottom: '#f1f1f1', ink: '#0a0a0a', muted: '#8c8c8c',
-    accent: '#0a0a0a', frame: '#dddddd', grain: 0, shadowAlpha: 0.16, flat: false,
-  },
-  {
-    key: 'forest', name: 'Forest', dark: true, serif: true,
-    swatch: ['#16211c', '#9dc4a3', '#eef4ef'],
-    bgTop: '#16211c', bgBottom: '#080e0b', ink: '#eef4ef', muted: '#87a094',
-    accent: '#9dc4a3', frame: '#26362d', grain: 0.42, shadowAlpha: 0.4, flat: false,
-  },
-  {
-    key: 'paper', name: 'Paper', dark: false, serif: false,
-    swatch: ['#ffffff', '#e2542c', '#141414'],
-    bgTop: '#ffffff', bgBottom: '#ffffff', ink: '#141414', muted: '#9a9a9a',
-    accent: '#e2542c', frame: '#141414', grain: 0, shadowAlpha: 0, flat: true,
-  },
-];
-
-/* ------------------------------------------------
-   useInView
-   ------------------------------------------------ */
-const useInView = (threshold = 0.1) => {
-  const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { setVisible(true); obs.disconnect(); } },
-      { threshold },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [threshold]);
-  return { ref, visible };
-};
-
 /* ------------------------------------------------
    downloadPhoto helper
    ------------------------------------------------ */
@@ -189,7 +121,7 @@ const ToastStack: React.FC<{ toasts: Toast[] }> = ({ toasts }) => createPortal(
         className={`liquid-glass-heavy rounded-full px-5 py-2.5 shadow-xl shadow-black/10 flex items-center gap-2 text-sm font-medium ${
           toast.kind === 'error' ? 'text-red-500' : 'text-slate-700'
         }`}
-        style={{ animation: 'scaleInBounce 0.35s cubic-bezier(0.34,1.56,0.64,1) both' }}
+        data-anim="pop"
       >
         {toast.kind === 'success' && <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />}
         {toast.kind === 'error' && <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />}
@@ -250,7 +182,7 @@ const FaceRing: React.FC<FaceRingProps> = ({ bbox, imageAspect }) => {
       {ring && (
         <div
           className="absolute rounded-full"
-          style={{
+          data-anim="scale" style={{
             left: ring.left,
             top: ring.top,
             width: ring.size,
@@ -259,7 +191,6 @@ const FaceRing: React.FC<FaceRingProps> = ({ bbox, imageAspect }) => {
             // Spotlight: dim everything outside the circle (clipped by the
             // container's overflow-hidden rounded corners)
             boxShadow: '0 0 0 9999px rgba(15, 23, 42, 0.38), 0 0 18px rgba(255,255,255,0.55), inset 0 0 12px rgba(255,255,255,0.25)',
-            animation: 'scaleIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both',
           }}
         />
       )}
@@ -301,13 +232,11 @@ const FaceAvatar: React.FC<FaceAvatarProps> = ({ faceThumb, label, size = 'md' }
 const ExplanationPanel: React.FC<{ explanation: Explanation; normSignals?: NormSignals }> = ({ explanation, normSignals }) => (
   <div
     className="liquid-glass rounded-2xl p-4 sm:p-5"
-    style={{ animation: 'scaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both', transformOrigin: 'top' }}
+    data-anim="scale" style={{ transformOrigin: 'top' }}
   >
-    <div className="flex items-start gap-2.5 mb-3">
-      <div className="w-7 h-7 rounded-lg bg-lumina-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-        <Info className="w-3.5 h-3.5 text-lumina-500" />
-      </div>
-      <p className="text-sm text-slate-700 leading-relaxed">{explanation.summary}</p>
+    <div className="flex items-center gap-3 mb-3">
+      <img src={lumiSrc('point')} alt="" aria-hidden className="lumi-sprite h-16 w-auto flex-shrink-0 -scale-x-100" />
+      <p className="lumi-bubble text-sm !font-semibold leading-relaxed flex-1" data-tail="left">{explanation.summary}</p>
     </div>
 
     {explanation.reasons.length > 0 && (
@@ -386,7 +315,7 @@ const ManageDropdown: React.FC<ManageDropdownProps> = ({
       <div
         ref={menuRef}
         className="absolute right-0 top-full mt-2 w-56 z-50"
-        style={{ animation: 'scaleIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1) both', transformOrigin: 'top right' }}
+        data-anim="scale" style={{ transformOrigin: 'top right' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div
@@ -747,7 +676,6 @@ const EventRow: React.FC<EventRowProps> = ({ event, identities, index, onDelete,
   const topShowingOriginal = Boolean(topPhoto && enh.showOriginal[topPhoto.id]);
   const topDisplayUrl = topEnhanced && !topShowingOriginal ? topEnhanced.url : topPhoto?.url;
   const otherPhotos = event.photos.filter((p) => p.id !== event.topPhotoId);
-  const view = useInView(0.05);
 
   const [bestShotLoaded, setBestShotLoaded] = useState(false);
   const [bestShotAspect, setBestShotAspect] = useState<number | null>(null);
@@ -791,15 +719,21 @@ const EventRow: React.FC<EventRowProps> = ({ event, identities, index, onDelete,
   return (
     <section
       id={`event-${event.id}`}
-      ref={view.ref}
-      className={`flex flex-col gap-6 ${view.visible ? 'anim-fade-in-up' : 'opacity-0'}`}
-      style={view.visible ? { animationDelay: `${index * 100}ms` } : undefined}
+      className="flex flex-col gap-6"
+      data-anim="fade-up"
+      data-anim-on="view"
     >
       {/* Event header */}
       <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 liquid-glass-light rounded-2xl px-4 sm:px-5 py-4${isDropdownOpen ? ' relative z-[100]' : ''}`}>
         <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
-          <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex-shrink-0 flex items-center justify-center liquid-glass">
-            <CalendarDays className="w-5 h-5 sm:w-6 sm:h-6 text-lumina-400" />
+          {/* Lumi, dressed for this event (the album uses the same outfit). */}
+          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full flex-shrink-0 flex items-end justify-center liquid-glass overflow-hidden">
+            <img
+              src={lumiSrc(poseForEvent([event.label, event.autoLabel?.label], index))}
+              alt=""
+              aria-hidden
+              className="lumi-sprite h-[88%] w-auto"
+            />
           </div>
           <div className="min-w-0 flex-1">
             {isRenaming ? (
@@ -1032,7 +966,7 @@ const EventRow: React.FC<EventRowProps> = ({ event, identities, index, onDelete,
         </div>
 
         {/* Other photos carousel */}
-        <div className="flex-1 min-w-0 overflow-hidden flex flex-col gap-6">
+        <div className="w-full flex-1 min-w-0 overflow-hidden flex flex-col gap-6">
           {otherPhotos.length > 0 ? (
             <ClusterCarousel
               photos={otherPhotos}
@@ -1179,7 +1113,7 @@ const SearchSection: React.FC<SearchSectionProps> = ({
       </div>
 
       {results !== null && (
-        <div className="mt-6" style={{ animation: 'fadeInUp 0.4s var(--smooth) both' }}>
+        <div className="mt-6" data-anim="fade-up">
           <div className="flex items-center justify-between gap-3 mb-4">
             <span className="text-base font-medium text-slate-700">
               {results.length > 0 ? `Top matches for "${lastQuery}"` : `No matches for "${lastQuery}"`}
@@ -1197,7 +1131,7 @@ const SearchSection: React.FC<SearchSectionProps> = ({
               <div
                 key={photo.id}
                 className="relative aspect-square rounded-2xl overflow-hidden group liquid-glass-light cursor-zoom-in"
-                style={{ animation: `galleryCardIn 0.5s cubic-bezier(0.34,1.56,0.64,1) ${i * 45}ms both` }}
+                data-anim="pop" data-delay={i * 45}
                 onClick={() => onOpenItems(
                   results.map((r) => ({ photo: r.photo, event: eventByPhotoId.get(r.photo.id) ?? null })),
                   i,
@@ -1278,13 +1212,12 @@ const PeopleManager: React.FC<PeopleManagerProps> = ({ identities, photosById, o
     <div
       className="fixed inset-0 z-[300] flex items-center justify-center p-4 sm:p-6"
       onClick={onClose}
-      style={{ background: 'rgba(30, 27, 60, 0.28)', backdropFilter: 'blur(6px)', animation: 'fadeInUp 0.2s ease both' }}
+      data-anim="fade" style={{ background: 'rgba(30, 27, 60, 0.28)', backdropFilter: 'blur(6px)' }}
     >
       <div
         className="w-full max-w-md max-h-[82vh] flex flex-col rounded-3xl overflow-hidden shadow-2xl shadow-black/25 ring-1 ring-white/60"
-        style={{
+        data-anim="pop" style={{
           background: 'linear-gradient(165deg, rgba(255,255,255,0.98) 0%, rgba(248,246,255,0.96) 100%)',
-          animation: 'scaleInBounce 0.35s cubic-bezier(0.34,1.56,0.64,1) both',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1320,7 +1253,7 @@ const PeopleManager: React.FC<PeopleManagerProps> = ({ identities, photosById, o
                   ? 'bg-indigo-50/70 border-indigo-200 shadow-sm'
                   : 'bg-white/70 border-slate-100 hover:border-slate-200 hover:shadow-sm'
               }`}
-              style={{ animation: `fadeInUp 0.35s var(--smooth) ${Math.min(i * 40, 300)}ms both` }}
+              data-anim="fade-up" data-delay={Math.min(i * 40, 300)}
             >
               <div className="flex items-center gap-3 p-3">
                 <FaceAvatar faceThumb={ident.faceThumb} label={ident.label} size="sm" />
@@ -1394,7 +1327,7 @@ const PeopleManager: React.FC<PeopleManagerProps> = ({ identities, photosById, o
               </div>
 
               {mergingId === ident.id && (
-                <div className="px-3 pb-3" style={{ animation: 'fadeInUp 0.25s var(--smooth) both' }}>
+                <div className="px-3 pb-3" data-anim="fade-up">
                   <div className="rounded-xl bg-white/80 border border-indigo-100 p-3">
                     <p className="text-[11px] text-slate-500 mb-2 font-medium">
                       <span className="text-indigo-500 font-semibold">"{ident.label}"</span> is the same person as…
@@ -1421,7 +1354,7 @@ const PeopleManager: React.FC<PeopleManagerProps> = ({ identities, photosById, o
               )}
 
               {photosOpenId === ident.id && (
-                <div className="px-3 pb-3" style={{ animation: 'fadeInUp 0.25s var(--smooth) both' }}>
+                <div className="px-3 pb-3" data-anim="fade-up">
                   <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
                     <p className="text-[11px] text-slate-500 mb-2 font-medium">
                       Click a photo that <span className="font-semibold">isn't</span> {ident.label} to reassign it.
@@ -1448,7 +1381,7 @@ const PeopleManager: React.FC<PeopleManagerProps> = ({ identities, photosById, o
                       })}
                     </div>
                     {movingPhotoId && identities.length > 1 && (
-                      <div className="mt-2 pt-2 border-t border-slate-200/70" style={{ animation: 'fadeInUp 0.2s ease both' }}>
+                      <div className="mt-2 pt-2 border-t border-slate-200/70" data-anim="fade-up">
                         <p className="text-[11px] text-red-400 font-medium mb-1.5">This photo actually shows…</p>
                         <div className="flex flex-wrap gap-1.5">
                           {identities.filter((other) => other.id !== ident.id).map((other) => (
@@ -1552,10 +1485,10 @@ const PersonalizationPanel: React.FC<PersonalizationPanelProps> = ({ jobId, anch
       <div className="fixed inset-0 z-[300]" onClick={onClose} aria-hidden />
       <div
         className="fixed w-[min(360px,calc(100vw-2rem))] z-[310] max-h-[calc(100vh-120px)] overflow-y-auto rounded-2xl shadow-2xl shadow-black/20 ring-1 ring-white/60 p-5"
-        style={{
+        data-anim="scale" style={{
           ...panelStyle,
           background: 'linear-gradient(165deg, rgba(255,255,255,0.98) 0%, rgba(248,246,255,0.96) 100%)',
-          animation: 'scaleIn 0.2s cubic-bezier(0.34,1.56,0.64,1) both', transformOrigin: 'top right',
+           transformOrigin: 'top right',
         }}
       >
         <div className="flex items-center justify-between mb-1">
@@ -1676,7 +1609,7 @@ const PersonPillBar: React.FC<PersonPillBarProps> = ({
                 ? 'bg-indigo-500 text-white shadow-md shadow-indigo-500/25'
                 : 'bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20'
             }`}
-            style={{ animation: 'scaleIn 0.25s cubic-bezier(0.34,1.56,0.64,1) both' }}
+            data-anim="scale"
             title="Circle this person's face in every photo"
           >
             <ScanFace className="w-3 h-3" />
@@ -1800,26 +1733,25 @@ type CollageChoiceSet = {
   chapters: boolean;
   cast: boolean;
   character: boolean;
-  characterBody: string;
+  characterOutfit: string;
 };
 
 interface CollagePanelProps {
   photoCount: number;
   enhancedCount: number;
   busy: boolean;
-  previewBusy: boolean;
   onBuild: (options: CollageChoiceSet) => void;
-  onPreview: (options: CollageChoiceSet) => void;
-  /** Hand the fetched palettes up so the viewer can restyle a plan locally. */
-  onThemesLoaded: (themes: CollageTheme[]) => void;
   onClose: () => void;
 }
 
 const CollagePanel: React.FC<CollagePanelProps> = ({
-  photoCount, enhancedCount, busy, previewBusy, onBuild, onPreview, onThemesLoaded, onClose,
+  photoCount, enhancedCount, busy, onBuild, onClose,
 }) => {
+  // Signed-in users start from the album theme and Lumi outfit on their profile.
+  const { profile } = useAuth();
+  const preferredTheme = profile?.collage_theme;
   const [themes, setThemes] = useState<CollageTheme[]>(FALLBACK_COLLAGE_THEMES);
-  const [theme, setTheme] = useState('midnight');
+  const [theme, setTheme] = useState(preferredTheme ?? 'lumi');
   const [themesLoading, setThemesLoading] = useState(true);
   const [aiAvailable, setAiAvailable] = useState(false);
   const [title, setTitle] = useState('');
@@ -1829,9 +1761,9 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
   const [useEnhanced, setUseEnhanced] = useState(true);
   const [chapters, setChapters] = useState(true);
   const [cast, setCast] = useState(true);
-  const [character, setCharacter] = useState(false);
-  const [characterBody, setCharacterBody] = useState('bean');
-  const [bodies, setBodies] = useState<CharacterBody[]>(FALLBACK_CHARACTER_BODIES);
+  const [character, setCharacter] = useState(true);
+  const [characterOutfit, setCharacterOutfit] = useState<string>(profile?.lumi_outfit ?? 'classic');
+  const [outfits, setOutfits] = useState<CharacterOutfit[]>(FALLBACK_CHARACTER_OUTFITS);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1841,10 +1773,10 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
         if (!alive) return;
         if (data.themes?.length) {
           setThemes(data.themes);
-          setTheme(data.default || data.themes[0].key);
-          onThemesLoaded(data.themes);
+          const preferred = data.themes.some((t) => t.key === preferredTheme) ? preferredTheme : undefined;
+          setTheme(preferred || data.default || data.themes[0].key);
         }
-        if (data.characterBodies?.length) setBodies(data.characterBodies);
+        if (data.characterOutfits?.length) setOutfits(data.characterOutfits);
         setAiAvailable(data.aiTitles);
         setAutoTitle(data.aiTitles);
         setAiCaptions(data.aiCaptions ?? data.aiTitles);
@@ -1865,15 +1797,10 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
 
   const choices = (): CollageChoiceSet => ({
     theme, title: title.trim(), autoTitle, captions, aiCaptions, useEnhanced,
-    chapters, cast, character, characterBody,
+    chapters, cast, character, characterOutfit,
   });
 
-  /** Paper exists for 小黑 — pure white, hairline rules, square corners — so
-   *  choosing it brings him along. Turning him back off is one tap. */
-  const pickTheme = (key: string) => {
-    setTheme(key);
-    if (key === 'paper') setCharacter(true);
-  };
+  const pickTheme = (key: string) => setTheme(key);
 
   const toggleRow = (
     checked: boolean,
@@ -1883,6 +1810,8 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
   ) => (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
       onClick={() => onChange(!checked)}
       className="w-full flex items-start gap-3 text-left group"
     >
@@ -1908,18 +1837,16 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
     <div
       className="fixed inset-0 z-[300] flex items-center justify-center p-4 sm:p-6"
       onClick={busy ? undefined : onClose}
-      style={{
+      data-anim="fade" style={{
         background: 'rgba(24, 22, 48, 0.32)',
         backdropFilter: 'blur(10px) saturate(140%)',
-        animation: 'fadeInUp 0.22s ease both',
       }}
     >
       <div
         className="w-full max-w-md max-h-[88vh] flex flex-col rounded-3xl overflow-hidden"
-        style={{
+        data-anim="pop" style={{
           background: 'linear-gradient(168deg, #ffffff 0%, #f7f5fd 100%)',
           boxShadow: '0 24px 70px rgba(20,18,48,0.30), 0 0 0 1px rgba(255,255,255,0.7)',
-          animation: 'scaleInBounce 0.35s cubic-bezier(0.34,1.56,0.64,1) both',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -2023,25 +1950,32 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
                 'A title page for each event, so the album reads as a sequence')}
               {toggleRow(cast, setCast, 'Cast page',
                 'Introduces the people your photos found, before the photos start')}
-              {toggleRow(character, setCharacter, 'Put 小黑 to work',
-                'A small character who carries the album between its chapters')}
+              {toggleRow(character, setCharacter, 'Bring Lumi along',
+                'Lumi dresses up for each chapter and page, to match your photos')}
             </div>
 
             {character && (
               <div className="mt-4">
-                <p className="text-[10px] text-slate-500 mb-2">His silhouette</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {bodies.map((b) => (
+                <p className="text-[10px] text-slate-500 mb-2">Lumi's outfit</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {outfits.map((o) => (
                     <button
-                      key={b.key}
-                      onClick={() => setCharacterBody(b.key)}
-                      className={`px-2.5 py-1.5 rounded-xl text-[11px] font-medium border transition-all duration-200 ${
-                        characterBody === b.key
+                      key={o.key}
+                      onClick={() => setCharacterOutfit(o.key)}
+                      aria-pressed={characterOutfit === o.key}
+                      className={`flex flex-col items-center gap-1 rounded-2xl pt-2 pb-1.5 border text-[11px] font-medium transition-all duration-200 ${
+                        characterOutfit === o.key
                           ? 'border-lumina-500 bg-lumina-500/[0.08] text-slate-800'
                           : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                       }`}
                     >
-                      {b.name}
+                      <img
+                        src="/lumi/idle.webp"
+                        alt=""
+                        className="h-12 w-auto"
+                        style={{ filter: `hue-rotate(${o.hue}deg) saturate(${o.saturate})` }}
+                      />
+                      {o.name}
                     </button>
                   ))}
                 </div>
@@ -2071,20 +2005,12 @@ const CollagePanel: React.FC<CollagePanelProps> = ({
 
         <div className="px-6 py-5 space-y-2.5">
           <button
-            onClick={() => onPreview(choices())}
-            disabled={busy || previewBusy || photoCount === 0}
-            className="w-full flex items-center justify-center gap-2 bg-lumina-600 text-white px-5 py-3 rounded-2xl text-[11px] font-bold uppercase tracking-[0.14em] hover:bg-lumina-700 disabled:opacity-40 transition-all duration-300"
-          >
-            {previewBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
-            {previewBusy ? 'Laying it out…' : 'Open the album'}
-          </button>
-          <button
             onClick={() => onBuild(choices())}
-            disabled={busy || previewBusy || photoCount === 0}
-            className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl text-[11px] font-bold uppercase tracking-[0.14em] text-slate-600 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 transition-all duration-300"
+            disabled={busy || photoCount === 0}
+            className="btn-jelly w-full"
           >
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-            {busy ? 'Designing album…' : 'Download PDF'}
+            {busy ? 'Lumi is designing your album…' : 'Download PDF album'}
           </button>
           {busy && aiCaptions && (
             <p className="text-[11px] text-slate-500 text-center mt-3">
@@ -2118,6 +2044,11 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
 }) => {
   const [events, setEvents] = useState<Event[]>(initialEvents);
   const [identities, setIdentities] = useState<Identity[]>(initialIdentities);
+  // The profile's enhance style is the default; read through a ref so the
+  // enhance callback doesn't re-create when the profile saves.
+  const { profile } = useAuth();
+  const enhanceStyleRef = useRef<EnhanceStyle>('natural');
+  enhanceStyleRef.current = profile?.enhance_style ?? 'natural';
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [peopleManagerOpen, setPeopleManagerOpen] = useState(false);
@@ -2126,13 +2057,6 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   const [exporting, setExporting] = useState(false);
   const [collageOpen, setCollageOpen] = useState(false);
   const [collageBusy, setCollageBusy] = useState(false);
-  /** The album currently open in the flip-book, with the request that built it
-   *  so the PDF button in the viewer exports exactly what is on screen. */
-  const [albumPlan, setAlbumPlan] = useState<AlbumPlan | null>(null);
-  const [albumOptions, setAlbumOptions] = useState<CollageOptions | null>(null);
-  const [albumTheme, setAlbumTheme] = useState('midnight');
-  const [collageThemes, setCollageThemes] = useState<CollageTheme[]>(FALLBACK_COLLAGE_THEMES);
-  const [planBusy, setPlanBusy] = useState(false);
   const [enhanceEntries, setEnhanceEntries] = useState<Record<string, EnhanceEntry>>({});
   const [enhancePending, setEnhancePending] = useState<Record<string, boolean>>({});
   const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
@@ -2316,7 +2240,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
 
   /* ---- AI enhancement ---- */
 
-  const handleEnhance = useCallback(async (photoId: string, style: EnhanceStyle = 'natural') => {
+  const handleEnhance = useCallback(async (photoId: string, style: EnhanceStyle = enhanceStyleRef.current) => {
     if (!jobId) {
       notify('Enhancement requires a saved session.', 'error');
       return;
@@ -2438,39 +2362,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     }
   }, [jobId, collageRequest, notify]);
 
-  /** Open the flip-book. The plan is the same layout the PDF renders, so this
-   *  is a real preview rather than an approximation of one. */
-  const handlePreviewAlbum = useCallback(async (choices: CollageChoices) => {
-    const options = collageRequest(choices);
-    if (!options || !jobId) return;
 
-    setPlanBusy(true);
-    try {
-      const plan = await fetchAlbumPlan(jobId, options);
-      setAlbumPlan(plan);
-      setAlbumOptions(options);
-      setAlbumTheme(plan.theme.key);
-      setCollageOpen(false);
-    } catch (err) {
-      notify(err instanceof Error ? err.message : 'Could not build the preview.', 'error');
-    } finally {
-      setPlanBusy(false);
-    }
-  }, [jobId, collageRequest, notify]);
-
-  /** Export straight from the viewer, honouring a theme switched in there. */
-  const handleDownloadFromViewer = useCallback(async () => {
-    if (!jobId || !albumOptions) return;
-    setCollageBusy(true);
-    try {
-      await downloadCollage(jobId, { ...albumOptions, theme: albumTheme });
-      notify('Album downloaded.');
-    } catch (err) {
-      notify(err instanceof Error ? err.message : 'Album export failed.', 'error');
-    } finally {
-      setCollageBusy(false);
-    }
-  }, [jobId, albumOptions, albumTheme, notify]);
 
   const handleExport = useCallback(async () => {
     if (!jobId) {
@@ -2513,18 +2405,17 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   if (events.length === 0) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-20 text-center">
-        <div className="liquid-glass rounded-3xl p-12 anim-scale-in">
-          <div className="w-16 h-16 rounded-full bg-lumina-500/10 text-lumina-400 flex items-center justify-center mx-auto mb-6">
-            <Sparkles className="w-8 h-8" />
-          </div>
-          <h2 className="text-2xl font-semibold tracking-tight mb-2">Your smart gallery will appear here</h2>
-          <p className="text-sm text-slate-400 tracking-wide mb-8 max-w-md mx-auto leading-relaxed">
-            Select and analyze photos first. Lumina will group them by event and pick the best shots automatically.
+        <div className="liquid-glass-heavy rounded-[36px] px-6 py-10 sm:p-12 flex flex-col items-center" data-anim="scale">
+          <Lumi pose="think" size={150} say="Hmm, nothing to show yet…" bubble="top" />
+          <h1 className="font-display text-3xl font-bold text-slate-900 mt-6 mb-2">Your gallery lives here</h1>
+          <p className="text-sm text-slate-500 mb-8 max-w-md mx-auto leading-relaxed">
+            Pick some photos and let Lumi analyze them. They&rsquo;ll be grouped into
+            moments, with the best shot of everyone picked out.
           </p>
           {onGoToPhotos && (
             <button
               onClick={onGoToPhotos}
-              className="bg-lumina-600 text-white px-6 py-3 rounded-xl text-sm font-semibold tracking-wide inline-flex items-center gap-2 hover:bg-lumina-700 transition-all duration-300"
+              className="btn-jelly"
             >
               <ImageIcon className="w-4 h-4" />
               Go to Photos
@@ -2540,15 +2431,17 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-8">
-        <div>
-          <div className="flex items-center gap-2 text-lumina-400 font-medium text-xs uppercase tracking-widest mb-2 anim-fade-in-left">
-            <Zap className="w-3.5 h-3.5" />
-            <span>Event-Based Smart Curation Active</span>
+        <div className="flex items-center gap-3 sm:gap-5 min-w-0">
+          <Lumi pose="star" size={92} className="shrink-0" />
+          <div className="min-w-0">
+            <span className="chip mb-2" data-anim="fade-left">
+              <Zap className="w-3 h-3" /> Curated by Lumi
+            </span>
+            <h1 className="font-display text-3xl md:text-5xl font-bold text-slate-900" data-anim="fade-up" data-delay="100">Your gallery</h1>
+            <p className="text-slate-500 text-sm mt-1 font-semibold" data-anim="fade-up" data-delay="200">
+              {events.length} {events.length === 1 ? 'moment' : 'moments'} · {identities.length} {identities.length === 1 ? 'person' : 'people'} · {totalPhotos} photos
+            </p>
           </div>
-          <h2 className="text-3xl md:text-4xl font-medium tracking-tight anim-fade-in-up d-100">Smart Gallery</h2>
-          <p className="text-slate-400 text-sm mt-1 tracking-wide anim-fade-in-up d-200">
-            {events.length} {events.length === 1 ? 'event' : 'events'} · {identities.length} {identities.length === 1 ? 'person' : 'people'} · {totalPhotos} photos
-          </p>
         </div>
 
         <div className={`flex items-center gap-2.5 anim-fade-in-right d-300 flex-wrap ${searchActive ? 'hidden' : ''}`}>
@@ -2662,7 +2555,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
 
       {/* Main content: Rejects bin OR Showcase gallery OR event rows */}
       {!searchActive && rejectsOpen && (
-        <div key="rejects" style={{ animation: 'fadeInUp 0.4s var(--smooth) both' }}>
+        <div key="rejects" data-anim="fade-up">
           <div className="flex flex-col items-center text-center gap-2 mb-8">
             <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full liquid-glass">
               <Trash2 className="w-3.5 h-3.5 text-red-400" />
@@ -2678,7 +2571,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
               <div
                 key={photo.id}
                 className="relative rounded-2xl overflow-hidden liquid-glass-light cursor-zoom-in group"
-                style={{ animation: `galleryCardIn 0.5s cubic-bezier(0.34,1.56,0.64,1) ${Math.min(i * 40, 500)}ms both` }}
+                data-anim="pop" data-delay={Math.min(i * 40, 500)}
                 onClick={() => openEventPhoto(event, photo.id)}
               >
                 <div className="aspect-square">
@@ -2772,26 +2665,11 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
           photoCount={curatedPhotoIds().length}
           enhancedCount={Object.keys(enhanceEntries).length}
           busy={collageBusy}
-          previewBusy={planBusy}
           onBuild={handleBuildCollage}
-          onPreview={handlePreviewAlbum}
-          onThemesLoaded={setCollageThemes}
           onClose={() => setCollageOpen(false)}
         />
       )}
 
-      {albumPlan && jobId && (
-        <AlbumViewer
-          jobId={jobId}
-          plan={albumPlan}
-          themes={collageThemes}
-          themeKey={albumTheme}
-          onThemeChange={setAlbumTheme}
-          onDownload={handleDownloadFromViewer}
-          downloading={collageBusy}
-          onClose={() => setAlbumPlan(null)}
-        />
-      )}
 
       <ToastStack toasts={toasts} />
     </div>

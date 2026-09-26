@@ -6,6 +6,7 @@ import type {
   SearchResult,
   SessionSummary,
 } from '../types';
+import { supabase } from './supabase';
 
 const BACKEND_BASE_URL = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? 'http://127.0.0.1:8000';
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) ?? '';
@@ -21,8 +22,12 @@ export function getClientId(): string {
   return id;
 }
 
-function apiHeaders(json = false): Record<string, string> {
+/** Signed in, requests also carry the Supabase access token, so the backend
+ *  files sessions and learned taste under the account instead of the browser. */
+async function apiHeaders(json = false): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'X-Client-Id': getClientId() };
+  const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
+  if (token) headers.Authorization = `Bearer ${token}`;
   if (API_KEY) headers['X-API-Key'] = API_KEY;
   if (json) headers['Content-Type'] = 'application/json';
   return headers;
@@ -158,7 +163,7 @@ export async function startAnalysis(photos: Photo[]): Promise<string> {
 
   const response = await fetch(`${BACKEND_BASE_URL}/api/analyze`, {
     method: 'POST',
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
     body: form,
   });
   await requireOk(response, 'Start analysis');
@@ -169,7 +174,7 @@ export async function startAnalysis(photos: Photo[]): Promise<string> {
 
 export async function getAnalysisStatus(jobId: string): Promise<AnalyzeStatus> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/analyze/${jobId}`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Fetch analysis status');
   return response.json() as Promise<AnalyzeStatus>;
@@ -181,11 +186,21 @@ export async function getAnalysisStatus(jobId: string): Promise<AnalyzeStatus> {
 
 export async function listSessions(): Promise<SessionSummary[]> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/sessions`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'List sessions');
   const payload = await response.json() as { sessions: SessionSummary[] };
   return payload.sessions;
+}
+
+/** After sign-in: move this browser's anonymous sessions and taste into the account. */
+export async function claimAnonymousData(): Promise<{ sessions: number; feedback: number; preferences: number }> {
+  const response = await fetch(`${BACKEND_BASE_URL}/api/account/claim`, {
+    method: 'POST',
+    headers: await apiHeaders(),
+  });
+  await requireOk(response, 'Move sessions to your account');
+  return response.json();
 }
 
 export type SessionDetail = {
@@ -201,14 +216,14 @@ export type SessionDetail = {
 export async function deleteSession(jobId: string): Promise<void> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/sessions/${jobId}`, {
     method: 'DELETE',
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Delete session');
 }
 
 export async function getSession(jobId: string): Promise<SessionDetail> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/sessions/${jobId}`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Load session');
   return response.json() as Promise<SessionDetail>;
@@ -233,7 +248,7 @@ export async function searchPhotos(
 ): Promise<SearchResult[]> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/search/${jobId}`, {
     method: 'POST',
-    headers: apiHeaders(true),
+    headers: await apiHeaders(true),
     body: JSON.stringify({ query, topK, personId: personId ?? null }),
   });
   await requireOk(response, 'Search');
@@ -253,7 +268,7 @@ export async function submitFeedback(
 ): Promise<{ weights: NormSignals; nUpdates: number }> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/feedback`, {
     method: 'POST',
-    headers: apiHeaders(true),
+    headers: await apiHeaders(true),
     body: JSON.stringify({ jobId, eventId, winnerPhotoId, loserPhotoId }),
   });
   await requireOk(response, 'Submit feedback');
@@ -262,16 +277,27 @@ export async function submitFeedback(
 
 export async function getPreferences(): Promise<PreferenceState> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/preferences`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Load preferences');
+  return response.json() as Promise<PreferenceState>;
+}
+
+/** Hand-tuned weights; the server normalises them to sum to 1. */
+export async function setPreferenceWeights(weights: NormSignals): Promise<PreferenceState> {
+  const response = await fetch(`${BACKEND_BASE_URL}/api/preferences`, {
+    method: 'PUT',
+    headers: await apiHeaders(true),
+    body: JSON.stringify({ weights }),
+  });
+  await requireOk(response, 'Save preferences');
   return response.json() as Promise<PreferenceState>;
 }
 
 export async function resetPreferences(): Promise<void> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/preferences/reset`, {
     method: 'POST',
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Reset preferences');
 }
@@ -289,7 +315,7 @@ export type RescoreResult = {
 export async function rescoreWithPreferences(jobId: string): Promise<RescoreResult> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/rescore/${jobId}`, {
     method: 'POST',
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Personalised rescore');
   return response.json() as Promise<RescoreResult>;
@@ -310,7 +336,7 @@ export type CorrectionAction =
 export async function applyCorrection(jobId: string, correction: CorrectionAction): Promise<AnalyzeResult> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/corrections/${jobId}`, {
     method: 'POST',
-    headers: apiHeaders(true),
+    headers: await apiHeaders(true),
     body: JSON.stringify(correction),
   });
   await requireOk(response, 'Apply correction');
@@ -325,7 +351,7 @@ export async function applyCorrection(jobId: string, correction: CorrectionActio
 export async function exportAlbum(jobId: string, photoIds: string[], albumName: string): Promise<void> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/export/${jobId}`, {
     method: 'POST',
-    headers: apiHeaders(true),
+    headers: await apiHeaders(true),
     body: JSON.stringify({ photoIds, albumName }),
   });
   await requireOk(response, 'Export album');
@@ -358,7 +384,7 @@ export async function startFaceAnalysis(photoBlob: Blob, filename: string): Prom
 
   const response = await fetch(`${BACKEND_BASE_URL}/api/face-analysis`, {
     method: 'POST',
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
     body: form,
   });
   await requireOk(response, 'Start face analysis');
@@ -368,7 +394,7 @@ export async function startFaceAnalysis(photoBlob: Blob, filename: string): Prom
 
 export async function getFaceAnalysisStatus(jobId: string): Promise<FaceAnalysisStatus> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/face-analysis/${jobId}`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Fetch face analysis status');
   return response.json() as Promise<FaceAnalysisStatus>;
@@ -401,7 +427,7 @@ export async function startEnhance(
 ): Promise<string> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/enhance`, {
     method: 'POST',
-    headers: apiHeaders(true),
+    headers: await apiHeaders(true),
     body: JSON.stringify({ jobId, photoId, style }),
   });
   await requireOk(response, 'Start enhancement');
@@ -411,7 +437,7 @@ export async function startEnhance(
 
 export async function getEnhanceStatus(enhanceId: string): Promise<EnhanceStatus> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/enhance/${enhanceId}`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Fetch enhancement status');
   return response.json() as Promise<EnhanceStatus>;
@@ -445,7 +471,7 @@ export function enhancedPhotoUrl(jobId: string, photoId: string, v?: number): st
 export async function deleteEnhanced(jobId: string, photoId: string): Promise<void> {
   const response = await fetch(
     `${BACKEND_BASE_URL}/api/enhanced/${jobId}/${encodeURIComponent(photoId)}`,
-    { method: 'DELETE', headers: apiHeaders() },
+    { method: 'DELETE', headers: await apiHeaders() },
   );
   await requireOk(response, 'Remove enhancement');
 }
@@ -473,96 +499,23 @@ export type CollageTheme = {
   flat: boolean;
 };
 
-export type CharacterBody = { key: string; name: string };
+/** One of Lumi's colourways. `hue`/`saturate` are CSS filter values — the
+ *  backend recolours with the same matrices, so the web and PDF match. */
+export type CharacterOutfit = { key: string; name: string; hue: number; saturate: number };
 
 export async function getCollageThemes(): Promise<{
   themes: CollageTheme[];
   default: string;
   aiTitles: boolean;
   aiCaptions?: boolean;
-  characterBodies?: CharacterBody[];
+  characterOutfits?: CharacterOutfit[];
 }> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/collage/themes`, {
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   await requireOk(response, 'Load collage themes');
   return response.json();
 }
-
-/** The album's layout, as computed by the backend planner.
- *
- *  Lengths are PDF points. The viewer scales everything by
- *  (rendered page width / page.width), so a plan renders identically at any
- *  size and the on-screen album matches the downloaded PDF page for page. */
-export type AlbumPlan = {
-  title: string;
-  subtitle: string;
-  footer: string;
-  stats: { value: string; label: string }[];
-  page: {
-    width: number;
-    height: number;
-    margin: number;
-    gutter: number;
-    cornerRadius: number;
-    captionHeight: number;
-    captionGap: number;
-    coverStripBottom: number;
-  };
-  theme: Omit<CollageTheme, 'swatch'>;
-  totalPages: number;
-  pages: AlbumPage[];
-};
-
-export type AlbumPage = {
-  kind: 'cover' | 'bento' | 'chapter' | 'cast';
-  /** 1-based among content pages; 0 on the cover. */
-  number: number;
-  tiles: AlbumTile[];
-  /** Heading on a chapter divider or the cast page. */
-  pageTitle: string;
-  pageSubtitle: string;
-  /** Where 小黑 stands on this page, if he is on it at all. */
-  character: AlbumCharacter | null;
-  portraits: AlbumPortrait[];
-};
-
-export type AlbumCharacter = {
-  pose: string;
-  body: string;
-  x: number;
-  top: number;
-  w: number;
-  h: number;
-  seed: number;
-  facing: number;
-};
-
-export type AlbumPortrait = {
-  castIndex: number;
-  name: string;
-  photoId: string;
-  /** Normalised [x1, y1, x2, y2] face box, for the circular crop. */
-  face: number[];
-  x: number;
-  top: number;
-  size: number;
-};
-
-export type AlbumTile = {
-  photoId: string;
-  /** True when the album embedded the AI-enhanced render, not the original. */
-  enhanced: boolean;
-  number: number;
-  x: number;
-  top: number;
-  w: number;
-  h: number;
-  /** Height of the image; less than `h` when a caption band is reserved. */
-  photoH: number;
-  caption: string;
-  subcaption: string;
-};
 
 export type CollageOptions = {
   photoIds: string[];
@@ -576,54 +529,13 @@ export type CollageOptions = {
   chapters?: boolean;
   cast?: boolean;
   character?: boolean;
-  characterBody?: string;
-  characterSeed?: number;
+  characterOutfit?: string;
 };
-
-/** 小黑, drawn to order by the backend. Deterministic in its query string, so
- *  the browser and the HTTP cache can both treat it as immutable. */
-export function xiaoheiUrl(
-  pose: string,
-  opts: {
-    w: number; h: number; seed?: number; body?: string; facing?: number;
-    ink?: string;
-    /** The eyes are holes in the body, so they take the page's colour. */
-    eye?: string;
-  },
-): string {
-  const params = new URLSearchParams({
-    w: String(Math.round(opts.w)),
-    h: String(Math.round(opts.h)),
-    seed: String(opts.seed ?? 0),
-    body: opts.body ?? 'bean',
-    facing: String(opts.facing ?? -1),
-    ink: (opts.ink ?? '#141414').replace('#', ''),
-    eye: (opts.eye ?? '#ffffff').replace('#', ''),
-  });
-  return `${BACKEND_BASE_URL}/api/xiaohei/${encodeURIComponent(pose)}.png?${params}`;
-}
-
-/** Fetch the album layout for the in-app viewer. Same request body as the
- *  export, so what you page through is what you download. */
-export async function fetchAlbumPlan(
-  jobId: string,
-  options: CollageOptions,
-  signal?: AbortSignal,
-): Promise<AlbumPlan> {
-  const response = await fetch(`${BACKEND_BASE_URL}/api/collage/${jobId}/plan`, {
-    method: 'POST',
-    headers: apiHeaders(true),
-    body: JSON.stringify(options),
-    signal,
-  });
-  await requireOk(response, 'Load album preview');
-  return response.json();
-}
 
 export async function downloadCollage(jobId: string, options: CollageOptions): Promise<void> {
   const response = await fetch(`${BACKEND_BASE_URL}/api/collage/${jobId}`, {
     method: 'POST',
-    headers: apiHeaders(true),
+    headers: await apiHeaders(true),
     body: JSON.stringify(options),
   });
   await requireOk(response, 'Build collage');

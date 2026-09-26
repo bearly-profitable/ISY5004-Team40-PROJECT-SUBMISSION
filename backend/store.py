@@ -2,7 +2,8 @@
 
 Replaces the in-memory job store with durable storage:
 
-- jobs / results          -> sessions survive server restarts, shareable by id
+- jobs / results          -> sessions survive server restarts, shareable by id,
+                             each owned by a signed-in user or an anonymous browser
 - feedback + preferences  -> pairwise swap events and learned per-user weights
 - corrections             -> audit log of human cluster corrections
 - embed_cache             -> per-image model outputs keyed by content hash, so
@@ -20,6 +21,9 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+#: list_sessions(owner=ALL_OWNERS) lists every job, for housekeeping.
+ALL_OWNERS = object()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -76,6 +80,11 @@ class LuminaStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            # Added with accounts; older databases get the column in place.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+            if "owner" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN owner TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS jobs_owner ON jobs(owner, created_at)")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30)
@@ -85,12 +94,14 @@ class LuminaStore:
         return conn
 
     # ------------------------------------------------------------------ jobs
-    def create_job(self, job_id: str, num_photos: int, photo_map: Dict[str, str]) -> None:
+    def create_job(
+        self, job_id: str, num_photos: int, photo_map: Dict[str, str], owner: Optional[str] = None,
+    ) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO jobs (job_id, created_at, status, num_photos, photo_map_json)"
-                " VALUES (?, ?, 'queued', ?, ?)",
-                (job_id, time.time(), num_photos, json.dumps(photo_map)),
+                "INSERT INTO jobs (job_id, created_at, status, num_photos, photo_map_json, owner)"
+                " VALUES (?, ?, 'queued', ?, ?, ?)",
+                (job_id, time.time(), num_photos, json.dumps(photo_map), owner),
             )
 
     def update_job(self, job_id: str, **fields: Any) -> None:
@@ -114,13 +125,26 @@ class LuminaStore:
             row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return self._job_row_to_dict(row) if row else None
 
-    def list_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Completed jobs, newest first, without the full result payload."""
+    def list_sessions(
+        self, limit: int = 50, owner: Any = ALL_OWNERS, include_legacy: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Completed jobs, newest first, without the full result payload.
+
+        ``owner`` narrows it to one owner's jobs (``include_legacy`` adds the
+        ownerless ones made before accounts existed); ``None`` means only the
+        ownerless ones; the default lists every job.
+        """
+        where, args = "status = 'completed'", []
+        if owner is None:
+            where += " AND owner IS NULL"
+        elif owner is not ALL_OWNERS:
+            where += " AND (owner = ?" + (" OR owner IS NULL)" if include_legacy else ")")
+            args.append(owner)
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT job_id, created_at, status, num_photos, result_json FROM jobs"
-                " WHERE status = 'completed' ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+                f" WHERE {where} ORDER BY created_at DESC LIMIT ?",
+                (*args, limit),
             ).fetchall()
         sessions = []
         for row in rows:
@@ -159,6 +183,33 @@ class LuminaStore:
             return json.loads(row["photo_map_json"])
         return {}
 
+    def job_owner(self, job_id: str) -> tuple[bool, Optional[str]]:
+        """(exists, owner) for one job."""
+        with self._conn() as conn:
+            row = conn.execute("SELECT owner FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return (row is not None, row["owner"] if row else None)
+
+    def claim_anonymous(self, anon_id: str, user_owner: str) -> Dict[str, int]:
+        """Hand everything an anonymous browser made to the account that just
+        signed in on it: its sessions, its swap history and, unless the account
+        already has one, its learned taste."""
+        with self._conn() as conn:
+            jobs = conn.execute(
+                "UPDATE jobs SET owner = ? WHERE owner = ?", (user_owner, anon_id)
+            ).rowcount
+            feedback = conn.execute(
+                "UPDATE feedback SET client_id = ? WHERE client_id = ?", (user_owner, anon_id)
+            ).rowcount
+            has_prefs = conn.execute(
+                "SELECT 1 FROM preferences WHERE client_id = ?", (user_owner,)
+            ).fetchone()
+            prefs = 0
+            if not has_prefs:
+                prefs = conn.execute(
+                    "UPDATE preferences SET client_id = ? WHERE client_id = ?", (user_owner, anon_id)
+                ).rowcount
+        return {"sessions": jobs, "feedback": feedback, "preferences": prefs}
+
     def mark_interrupted_jobs_failed(self) -> int:
         """Jobs that were queued/running when the server died can never finish."""
         with self._conn() as conn:
@@ -180,11 +231,19 @@ class LuminaStore:
             )
         return cur.rowcount > 0
 
-    def delete_jobs_older_than(self, max_age_seconds: float) -> List[str]:
-        cutoff = time.time() - max_age_seconds
+    def delete_jobs_older_than(
+        self, max_age_seconds: float, user_max_age_seconds: Optional[float] = None,
+    ) -> List[str]:
+        """Expire jobs. Signed-in users' jobs (owner ``user:…``) can be given a
+        longer life than anonymous ones."""
+        now = time.time()
+        user_cutoff = now - (user_max_age_seconds if user_max_age_seconds is not None else max_age_seconds)
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT job_id FROM jobs WHERE created_at < ?", (cutoff,)
+                "SELECT job_id FROM jobs WHERE"
+                " (created_at < ? AND (owner IS NULL OR owner NOT LIKE 'user:%'))"
+                " OR (created_at < ? AND owner LIKE 'user:%')",
+                (now - max_age_seconds, user_cutoff),
             ).fetchall()
             ids = [r["job_id"] for r in rows]
             if ids:

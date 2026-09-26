@@ -136,7 +136,7 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
   return createPortal(
     <div
       className="fixed inset-0 z-[350] flex flex-col"
-      style={{ background: 'rgba(10, 8, 24, 0.92)', backdropFilter: 'blur(14px)', animation: 'fadeInUp 0.2s ease both' }}
+      data-anim="fade" style={{ background: 'rgba(10, 8, 24, 0.92)', backdropFilter: 'blur(14px)' }}
     >
       {/* Top bar */}
       <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3.5 flex-shrink-0">
@@ -258,7 +258,7 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
         {panelOpen && member && (
           <div
             className="w-[290px] flex-shrink-0 overflow-y-auto px-5 py-2 pb-6 hidden sm:block"
-            style={{ animation: 'fadeInUp 0.25s ease both' }}
+            data-anim="fade-up"
           >
             {/* Verdict */}
             <div className="rounded-2xl bg-white/[0.06] border border-white/10 p-4 mb-3">

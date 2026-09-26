@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("reportlab")
 
 import collage  # noqa: E402
+import mascot  # noqa: E402
 
 
 def _photo(tmp_path, name: str, size=(400, 300), colour="skyblue"):
@@ -385,29 +386,6 @@ def test_plan_page_count_matches_the_rendered_pdf(tmp_path):
     assert plan.content_pages == len(plan.pages) - 1
 
 
-def test_plan_serialises_to_json(tmp_path):
-    import json
-
-    plan = _plan(tmp_path, count=6, title="Trip", subtitle="six photos",
-                 theme="ivory", stats=[("6", "photos")])
-    data = collage.plan_to_dict(plan)
-    assert json.loads(json.dumps(data))  # no non-serialisable values
-
-    assert data["title"] == "Trip"
-    assert data["theme"]["key"] == "ivory"
-    assert data["theme"]["accent"] == collage.THEMES["ivory"].accent
-    assert data["theme"]["flat"] is False
-    assert data["page"]["width"] == collage.PAGE_W
-    assert data["totalPages"] == len(data["pages"]) - 1
-    assert data["pages"][0]["kind"] == "cover"
-    assert data["stats"] == [{"value": "6", "label": "photos"}]
-
-    tile = data["pages"][1]["tiles"][0]
-    assert tile["photoId"].startswith("id-")
-    assert tile["caption"] == "Beach"
-    assert tile["photoH"] <= tile["h"]
-
-
 def test_plan_reserves_a_caption_band_only_when_labelled(tmp_path):
     from PIL import Image
 
@@ -586,29 +564,69 @@ def test_the_character_only_appears_when_asked(tmp_path):
     assert all(page.character is None for page in off.pages)
 
     on = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
-    characters = [page.character for page in on.pages if page.character]
-    assert len(characters) == 2
-    for placed in characters:
-        assert placed.pose in collage.CHAPTER_POSES
+    # Lumi is on both dividers and on every page of photos.
+    assert all(page.character for page in on.pages if page.kind != "cover")
+    for page in on.pages:
+        placed = page.character
+        if placed is None:
+            continue
+        assert placed.pose in mascot.POSES
         assert placed.x >= 0 and placed.top >= 0
         assert placed.x + placed.w <= collage.PAGE_W + 0.01
         assert placed.top + placed.h <= collage.PAGE_H + 0.01
 
 
-def test_the_character_wears_the_requested_silhouette(tmp_path):
+def test_lumi_dresses_for_the_chapter(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 3), ("Dinner", 3)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    poses = [page.character.pose for page in plan.pages if page.kind == "chapter"]
+    assert poses == ["beach", "dinner"]
+
+
+def test_lumi_on_a_photo_page_follows_its_photos(tmp_path):
+    photos = _chaptered(tmp_path, [("Event 1", 3)])
+    for photo in photos:
+        photo.scene = "Birthday"
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    bento = next(page for page in plan.pages if page.kind == "bento")
+    assert bento.character.pose == "birthday"
+
+
+def test_lumi_on_photo_pages_stays_clear_of_the_photos(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 20)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    for page in plan.pages:
+        if page.kind != "bento":
+            continue
+        lumi = page.character
+        for tile in page.tiles:
+            overlaps = (lumi.x < tile.x + tile.w and tile.x < lumi.x + lumi.w
+                        and lumi.top < tile.top + tile.h and tile.top < lumi.top + lumi.h)
+            assert not overlaps, (page.number, tile)
+
+
+def test_the_character_wears_the_requested_outfit(tmp_path):
     photos = _chaptered(tmp_path, [("Beach", 3), ("Dinner", 3)])
     plan = collage.plan_album(collage.CollageSpec(
-        photos=photos, character=True, character_body="funnel"))
-    assert all(page.character.body == "funnel"
+        photos=photos, character=True, character_outfit="mint"))
+    assert all(page.character.outfit == "mint"
                for page in plan.pages if page.character)
 
 
 def test_consecutive_dividers_use_different_poses(tmp_path):
-    """小黑 repeating one action down the whole album would read as wallpaper."""
+    """Lumi repeating one action down the whole album would read as wallpaper."""
     photos = _chaptered(tmp_path, [(f"Ch{i}", 3) for i in range(4)])
     plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
     poses = [page.character.pose for page in plan.pages if page.kind == "chapter"]
     assert len(set(poses)) == len(poses), poses
+
+
+def test_consecutive_photo_pages_use_different_poses(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 24)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    poses = [page.character.pose for page in plan.pages if page.kind == "bento"]
+    assert len(poses) > 2
+    assert all(a != b for a, b in zip(poses, poses[1:])), poses
 
 
 def test_an_album_with_chapters_cast_and_character_renders(tmp_path):
@@ -635,29 +653,92 @@ def test_the_paper_theme_is_flat(tmp_path):
     assert image.getcolors() == [(60 * 40, collage._rgb(paper.bg_top))]
 
 
-def test_plan_serialises_chapters_cast_and_character(tmp_path):
-    import json
-
+def test_the_cast_page_hands_out_name_tags(tmp_path):
     photos = _chaptered(tmp_path, [("Beach", 4), ("Dinner", 4)])
-    cast = [collage.CastMember(name="Alex", path=photos[0].path,
-                               photo_id="0-0", face=(0.3, 0.2, 0.6, 0.6))]
+    cast = [collage.CastMember(name="Alex", path=photos[0].path, photo_id="0-0")]
     plan = collage.plan_album(collage.CollageSpec(
         photos=photos, cast=cast, character=True, theme="paper"))
-    data = json.loads(json.dumps(collage.plan_to_dict(plan)))
+    cast_page = next(p for p in plan.pages if p.kind == "cast")
+    assert cast_page.title == "The cast"
+    assert cast_page.character.pose == "tag"
+    chapter = next(p for p in plan.pages if p.kind == "chapter")
+    assert chapter.title == "Beach"
+    assert chapter.character.pose == "beach"
+    assert chapter.character.outfit == "classic"
 
-    assert data["theme"]["key"] == "paper"
-    # The viewer styles itself from this payload, so a missing flag would show
-    # the Paper theme with the gradient and grain it exists to avoid.
-    assert data["theme"]["flat"] is True
-    assert data["theme"]["shadowAlpha"] == 0.0
-    cast_page = next(p for p in data["pages"] if p["kind"] == "cast")
-    assert cast_page["pageTitle"] == "The cast"
-    assert cast_page["portraits"][0]["name"] == "Alex"
-    assert cast_page["portraits"][0]["photoId"] == "0-0"
-    assert cast_page["portraits"][0]["face"] == [0.3, 0.2, 0.6, 0.6]
-    assert cast_page["character"]["pose"] == "tag"
 
-    chapter = next(p for p in data["pages"] if p["kind"] == "chapter")
-    assert chapter["pageTitle"] == "Beach"
-    assert "4 photograph" in chapter["pageSubtitle"]
-    assert chapter["character"]["body"] == "bean"
+# ---------------------------------------------------------------------------
+# Lumi holding the photos
+# ---------------------------------------------------------------------------
+
+def test_lumi_holds_the_biggest_photo_on_every_page(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 14)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    for page in plan.pages:
+        if page.kind != "bento":
+            continue
+        framed = [t for t in page.tiles if t.frame]
+        assert len(framed) == 1, page.number
+        biggest = max(page.tiles, key=lambda t: t.w * t.photo_h)
+        assert framed[0] is biggest or framed[0].photo_index == biggest.photo_index
+        assert framed[0].frame in mascot.frame_poses()
+
+
+def test_no_frames_without_lumi(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 8)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos))
+    assert not any(t.frame or t.polaroid is not None for p in plan.pages for t in p.tiles)
+    assert not any(p.kind == "closing" for p in plan.pages)
+
+
+def test_neighbouring_pages_use_different_frames(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 30)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    frames = [t.frame for p in plan.pages if p.kind == "bento" for t in p.tiles if t.frame]
+    assert len(frames) > 2
+    assert all(a != b for a, b in zip(frames, frames[1:])), frames
+
+
+def test_the_lumi_cover_hugs_the_first_photo(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 5)])
+    cover = collage.plan_album(collage.CollageSpec(photos=photos, character=True)).pages[0]
+    hero = next(t for t in cover.tiles if t.frame)
+    assert hero.photo_index == 0
+    assert [t.photo_index for t in cover.tiles if t.polaroid is not None] == [1, 2]
+    for tile in cover.tiles:
+        assert tile.x >= 0 and tile.x + tile.w <= collage.PAGE_W + 0.01
+        assert tile.top >= 0 and tile.top + tile.h <= collage.PAGE_H + 0.01
+
+
+def test_a_chapter_shows_its_opening_photo(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 3), ("Dinner", 4)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    chapters = [p for p in plan.pages if p.kind == "chapter"]
+    assert [p.feature.photo_index for p in chapters] == [0, 3]
+    for page in chapters:
+        assert page.feature.polaroid is not None
+        assert page.feature not in page.tiles      # art, not a numbered photo
+
+
+def test_the_album_ends_with_lumi_saying_goodbye(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 6)])
+    plan = collage.plan_album(collage.CollageSpec(photos=photos, character=True))
+    assert plan.pages[-1].kind == "closing"
+    assert plan.pages[-1].character.pose == "hug"
+
+
+def test_a_lumi_album_renders_in_every_theme_and_outfit(tmp_path):
+    photos = _chaptered(tmp_path, [("Beach", 5), ("Birthday", 4)])
+    for photo in photos:
+        photo.scene = photo.chapter
+    for theme in collage.THEMES:
+        for outfit in ("classic", "ocean"):
+            data = collage.build_collage_pdf(collage.CollageSpec(
+                photos=photos, character=True, theme=theme, character_outfit=outfit))
+            assert data.startswith(b"%PDF")
+
+
+def test_the_lumi_theme_is_the_default():
+    assert collage.DEFAULT_THEME == "lumi"
+    assert collage.THEMES["lumi"].soft
+

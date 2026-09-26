@@ -1,8 +1,8 @@
-
 import React, { useState, useRef, useCallback } from 'react';
 import { Photo } from '../types';
-import { Search, Play, Images, Check, ImageIcon, Upload } from 'lucide-react';
+import { Search, Play, Check, ImageIcon, Upload, Plus } from 'lucide-react';
 import { GlassCarousel } from '../components/GlassCarousel';
+import { Lumi } from '../components/Lumi';
 
 interface UploadViewProps {
   onAnalyze: (selectedPhotoIds: string[]) => void | Promise<void>;
@@ -11,12 +11,6 @@ interface UploadViewProps {
   isAnalyzing?: boolean;
   analyzeError?: string | null;
   maxPhotos: number;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export const UploadView: React.FC<UploadViewProps> = ({
@@ -45,14 +39,6 @@ export const UploadView: React.FC<UploadViewProps> = ({
     });
   };
 
-  const selectAll = () => {
-    if (selected.size === filtered.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(filtered.map((p) => p.id)));
-    }
-  };
-
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
@@ -68,12 +54,11 @@ export const UploadView: React.FC<UploadViewProps> = ({
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    setDragOver(false);
+    // Leaving for a child element is not leaving the drop zone.
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
   }, []);
 
-  const handleBrowseClick = () => {
-    fileInputRef.current?.click();
-  };
+  const handleBrowseClick = () => fileInputRef.current?.click();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0 && onLocalUpload) {
@@ -85,138 +70,128 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const filtered = photos.filter((p) =>
     p.name.toLowerCase().includes(filter.toLowerCase()),
   );
+  const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id));
+  const selectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(filtered.map((p) => p.id)));
+  };
   const featured = filtered.slice(0, 5).map((p) => ({
     url: p.url,
     label: `${p.name} — ${p.size}`,
   }));
 
-  const allSelected = filtered.length > 0 && selected.size === filtered.length;
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept="image/*"
+      multiple
+      className="hidden"
+      onChange={handleFileChange}
+    />
+  );
 
-  // Empty state — no photos loaded yet
+  // Empty state: Lumi, holding a camera, waiting for photos.
   if (photos.length === 0) {
     return (
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-16">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={handleFileChange}
-        />
-
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-12">
+        {fileInput}
         <div
-          className={`liquid-glass rounded-3xl p-12 text-center anim-scale-in drop-zone ${dragOver ? 'drag-over' : ''}`}
+          data-anim="scale"
+          className={`liquid-glass-heavy rounded-[36px] px-6 py-10 sm:p-14 text-center drop-zone transition-all duration-300 ${
+            dragOver ? 'drag-over ring-4 ring-lumina-300/60 scale-[1.01]' : ''
+          }`}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
         >
-          <div className="w-16 h-16 rounded-full bg-lumina-500/10 text-lumina-400 flex items-center justify-center mx-auto mb-6">
-            <Upload className="w-8 h-8" />
-          </div>
-          <h2 className="text-2xl font-semibold tracking-tight mb-2">Get started</h2>
-          <p className="text-sm text-slate-400 mb-8 max-w-md mx-auto leading-relaxed">
-            Drop a batch of photos from one event and Lumina will group them, find the
-            people, and pick the best shot of everyone.
+          <Lumi
+            pose={dragOver ? 'celebrate' : 'camera'}
+            size={170}
+            say={dragOver ? 'Ooh! Drop them right here!' : 'Show me your photos!'}
+            bubble="top"
+          />
+          <h1 className="font-display text-3xl sm:text-5xl font-bold text-slate-900 mt-6 mb-3">
+            Let&rsquo;s get started
+          </h1>
+          <p className="text-slate-500 text-sm sm:text-base mb-8 max-w-md mx-auto leading-relaxed">
+            Drop a batch of photos from one trip or party. Lumi will group them, find
+            the people, and pick the best shot of everyone.
           </p>
-          <div className="flex items-center justify-center gap-3 flex-wrap">
-            <button
-              onClick={handleBrowseClick}
-              className="bg-lumina-600 text-white px-6 py-3 rounded-xl text-sm font-semibold tracking-wide flex items-center gap-2 hover:bg-lumina-700 transition-all duration-300"
-            >
-              <Upload className="w-4 h-4" />
-              Upload Photos
-            </button>
-          </div>
-          <p className="text-xs text-slate-400 mt-6">
-            Drop photos here or click to browse &middot; Accepts image files &middot; Max {maxPhotos} photos
+          <button onClick={handleBrowseClick} className="btn-jelly text-base px-7 py-3.5">
+            <Upload className="w-4 h-4" /> Choose photos
+          </button>
+          <p className="text-xs font-bold text-slate-400 mt-6">
+            <span className="hidden sm:inline">Or drag them here · </span>
+            Images only · Up to {maxPhotos} photos
           </p>
         </div>
       </div>
     );
   }
 
+  const lumiLine = isAnalyzing
+    ? 'On it! Starting now…'
+    : selected.size === 0
+    ? 'Tap the photos you want me to look at.'
+    : selected.size === 1
+    ? 'Just one? Pick a few more and I can compare!'
+    : `${selected.size} photos. Let’s go!`;
+
   return (
     <div
-      className="max-w-7xl mx-auto px-4 sm:px-6 py-6"
+      className="max-w-7xl mx-auto px-4 sm:px-6 pb-28 lg:pb-8"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        className="hidden"
-        onChange={handleFileChange}
-      />
+      {fileInput}
 
-      {/* Drag overlay for existing grid */}
       {dragOver && (
-        <div className="fixed inset-0 z-40 bg-lumina-500/10 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-          <div className="liquid-glass rounded-3xl p-10 text-center">
-            <Upload className="w-10 h-10 text-lumina-400 mx-auto mb-3" />
-            <p className="text-lg font-medium">Drop photos to add</p>
+        <div className="fixed inset-0 z-40 bg-lumina-300/20 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+          <div className="liquid-glass-heavy rounded-[32px] p-8 sm:p-10 text-center">
+            <Lumi pose="celebrate" size={140} />
+            <p className="font-display text-2xl font-bold mt-3">Drop to add them</p>
           </div>
         </div>
       )}
 
-      {/* Compact header */}
-      <div className="flex items-center justify-between gap-4 mb-5 anim-fade-in-up">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-lumina-400 font-medium text-[10px] uppercase tracking-widest mb-1">
-            <Images className="w-3 h-3 shrink-0" />
-            <span className="truncate">Your upload</span>
-          </div>
-          <div className="flex items-baseline gap-3">
-            <h2 className="text-xl font-semibold tracking-tight">Select Photos</h2>
-            <span className="text-xs text-slate-400">
-              {photos.length} items
-              {selected.size > 0 && (
-                <span className="text-lumina-400 ml-1">· {selected.size} selected</span>
-              )}
-            </span>
-          </div>
+      {/* Header: Lumi, the count, and the actions */}
+      <div data-anim="fade-up" className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-5">
+        <div className="flex items-center gap-3 min-w-0">
+          <Lumi
+            pose={isAnalyzing ? 'search' : selected.size > 1 ? 'celebrate' : 'point'}
+            size={84}
+            say={lumiLine}
+          />
         </div>
-
-        <div className="flex items-center gap-2 shrink-0 anim-fade-in-right d-200">
-          <button
-            onClick={handleBrowseClick}
-            title="Upload more photos"
-            className="glass-btn p-2 rounded-lg text-slate-400 hover:text-white transition-colors"
-          >
-            <Upload className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="chip mr-auto sm:mr-1">{photos.length} photos · {selected.size} picked</span>
+          <button onClick={handleBrowseClick} className="btn-soft !py-2 !px-3.5 text-sm" title="Add more photos">
+            <Plus className="w-4 h-4" /> Add
           </button>
-          <button
-            onClick={selectAll}
-            disabled={filtered.length === 0}
-            className="glass-btn px-3 py-1.5 rounded-lg text-xs font-medium"
-          >
-            {allSelected ? 'Deselect' : 'Select All'}
+          <button onClick={selectAll} disabled={filtered.length === 0} className="btn-soft !py-2 !px-3.5 text-sm">
+            {allSelected ? 'Clear' : 'Select all'}
           </button>
           <button
             onClick={() => onAnalyze(Array.from(selected))}
             disabled={selected.size === 0 || isAnalyzing}
-            className="bg-lumina-600 text-white px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide flex items-center gap-1.5 hover:bg-lumina-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-300"
+            className="btn-jelly btn-jelly-sm hidden lg:inline-flex"
           >
-            <Play className="w-3 h-3 fill-current" />
+            <Play className="w-3.5 h-3.5 fill-current" />
             {isAnalyzing ? 'Starting…' : 'Analyze'}
           </button>
         </div>
       </div>
 
       {analyzeError && (
-        <div className="mb-4 liquid-glass-light border border-red-400/30 rounded-xl p-3 text-xs text-red-400">
+        <div role="alert" className="mb-4 liquid-glass-light border border-red-300/60 rounded-2xl p-3 text-sm font-semibold text-red-500">
           {analyzeError}
         </div>
       )}
 
-      {/* Main two-column layout */}
-      <div className="flex gap-4 items-start">
-
-        {/* Left — compact carousel */}
-        <div className="w-[55%] shrink-0 anim-scale-in d-200">
+      <div className="flex flex-col lg:flex-row gap-4 lg:items-start">
+        {/* Preview carousel: a wide banner on phones, a column on desktop */}
+        <div data-anim="scale" data-delay="100" className="w-full lg:w-[52%] shrink-0">
           {featured.length > 0 ? (
             <GlassCarousel
               images={featured}
@@ -224,103 +199,102 @@ export const UploadView: React.FC<UploadViewProps> = ({
               interval={4000}
               aspectRatio="4/3"
               showArrows
-              className="shadow-lg shadow-black/10 rounded-2xl overflow-hidden"
+              className="shadow-lg shadow-slate-900/10 rounded-[28px] overflow-hidden"
             />
           ) : (
-            <div className="liquid-glass rounded-2xl flex items-center justify-center" style={{ aspectRatio: '4/3' }}>
-              <ImageIcon className="w-8 h-8 text-slate-500" />
+            <div className="liquid-glass rounded-[28px] flex items-center justify-center" style={{ aspectRatio: '4/3' }}>
+              <ImageIcon className="w-8 h-8 text-slate-400" />
             </div>
           )}
         </div>
 
-        {/* Right — scrollable image selection panel */}
         <div className="flex-1 min-w-0 flex flex-col gap-3">
-          {/* Search bar */}
-          <div className="relative anim-fade-in-right d-100">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+          <div className="relative" data-anim="fade-left" data-delay="100">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Filter images…"
+              placeholder="Filter by file name…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className="glass-input rounded-xl py-2 pl-9 pr-3 w-full text-xs"
+              className="glass-input rounded-full py-2.5 pl-10 pr-4 w-full text-sm"
+              aria-label="Filter photos by file name"
             />
           </div>
 
-          {/* Scrollable grid */}
           {filtered.length === 0 ? (
-            <div className="liquid-glass rounded-2xl p-10 text-center anim-scale-in">
-              <ImageIcon className="w-8 h-8 text-slate-500 mx-auto mb-3" />
-              <p className="font-medium text-sm mb-0.5">No photos found</p>
-              <p className="text-xs text-slate-400">Try a different filter term.</p>
+            <div className="liquid-glass rounded-[28px] p-8 text-center">
+              <Lumi pose="think" size={100} />
+              <p className="font-extrabold mt-3">No photos match that</p>
+              <p className="text-sm text-slate-500">Try a different name.</p>
             </div>
           ) : (
-            <div
-              className="overflow-y-auto pr-1 anim-fade-in-up d-200"
-              style={{ maxHeight: 'calc(4/3 * 55vw * 0.97 - 2.5rem)', minHeight: '200px' }}
-            >
-              <div className="grid grid-cols-3 xl:grid-cols-4 gap-2">
+            <div className="lg:overflow-y-auto lg:max-h-[calc(100svh-15rem)] lg:pr-1">
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-2.5">
                 {filtered.map((photo, i) => {
                   const isSelected = selected.has(photo.id);
                   const loaded = imageLoaded.has(photo.id);
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={photo.id}
                       onClick={() => toggle(photo.id)}
-                      className={`group relative aspect-square rounded-xl cursor-pointer transition-all duration-300 ${
+                      aria-pressed={isSelected}
+                      aria-label={`${isSelected ? 'Deselect' : 'Select'} ${photo.name}`}
+                      data-anim="pop"
+                      data-delay={Math.min(i, 30) * 18}
+                      className={`group relative aspect-square rounded-2xl cursor-pointer transition-transform duration-200 ${
                         isSelected
-                          ? 'ring-2 ring-lumina-500 ring-offset-2 ring-offset-white/5 scale-[0.96]'
-                          : 'hover:scale-[0.98]'
+                          ? 'ring-[3px] ring-lumina-500 ring-offset-2 ring-offset-[#f6eef4] scale-[0.95]'
+                          : 'hover:scale-[0.97]'
                       }`}
-                      style={{ animation: `fadeInUp 0.5s cubic-bezier(0,0,0.2,1) ${40 + i * 20}ms both` }}
                     >
-                      {/* Inner wrapper clips image to rounded corners */}
-                      <div className="absolute inset-0 rounded-xl overflow-hidden">
-                        {/* Skeleton placeholder */}
-                        {!loaded && (
-                          <div className="absolute inset-0 skeleton" />
-                        )}
+                      <div className="absolute inset-0 rounded-2xl overflow-hidden">
+                        {!loaded && <div className="absolute inset-0 skeleton" />}
                         <img
                           src={photo.url}
-                          alt={photo.name}
+                          alt=""
                           className={`w-full h-full object-cover transition-all duration-300 ${
                             loaded ? '' : 'opacity-0'
-                          } ${
-                            isSelected ? 'brightness-110' : 'brightness-90 group-hover:brightness-100'
-                          }`}
+                          } ${isSelected ? 'brightness-105' : 'brightness-95 group-hover:brightness-100'}`}
                           loading="lazy"
                           onLoad={() => markLoaded(photo.id)}
                         />
-
-                        {/* Bottom info */}
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent px-2 py-1.5">
-                          <span className="text-[9px] text-white/90 font-medium block truncate leading-tight">{photo.name}</span>
-                          <span className="text-[8px] text-white/50 leading-tight">{photo.size}</span>
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900/60 to-transparent px-2 pt-4 pb-1.5 text-left">
+                          <span className="text-[10px] text-white font-bold block truncate leading-tight">{photo.name}</span>
                         </div>
-
-                        {/* Hover shimmer */}
-                        <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
                       </div>
-
-                      {/* Selection indicator — outside overflow clip so it's always visible */}
                       <div className="absolute top-1.5 right-1.5 z-10">
                         <div
-                          className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all duration-300 ${
+                          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
                             isSelected
-                              ? 'bg-lumina-500 border-lumina-400 scale-100'
-                              : 'border-white/40 bg-black/20 backdrop-blur-sm scale-75 group-hover:scale-100'
+                              ? 'bg-lumina-500 border-white scale-100'
+                              : 'border-white/80 bg-slate-900/20 backdrop-blur-sm scale-90 group-hover:scale-100'
                           }`}
                         >
-                          {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                          {isSelected && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
             </div>
           )}
         </div>
+      </div>
+
+      {/* Phones and tablets: the main action lives at the bottom, within thumb reach. */}
+      <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 bg-gradient-to-t from-[#f6eef4] via-[#f6eef4]/90 to-transparent">
+        <button
+          onClick={() => onAnalyze(Array.from(selected))}
+          disabled={selected.size === 0 || isAnalyzing}
+          className="btn-jelly w-full py-4 text-base"
+        >
+          <Play className="w-4 h-4 fill-current" />
+          {isAnalyzing
+            ? 'Starting…'
+            : selected.size === 0 ? 'Pick photos to analyze' : `Analyze ${selected.size} photo${selected.size === 1 ? '' : 's'}`}
+        </button>
       </div>
     </div>
   );

@@ -134,7 +134,8 @@ export enum AppStep {
   PROCESSING = 'processing',
   GALLERY = 'gallery',
   FACE_ANALYSIS = 'face-analysis',
-  SESSIONS = 'sessions'
+  SESSIONS = 'sessions',
+  PROFILE = 'profile'
 }
 
 export interface FaceMetrics {

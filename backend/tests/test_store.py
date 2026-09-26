@@ -105,3 +105,43 @@ def test_corrections_log(store):
         rows = conn.execute("SELECT * FROM corrections").fetchall()
     assert len(rows) == 1
     assert rows[0]["action"] == "merge_persons"
+
+
+def test_sessions_are_scoped_to_their_owner(store):
+    for job_id, owner in [("mine", "user:1"), ("theirs", "user:2"), ("legacy", None), ("anon", "browser-a")]:
+        store.create_job(job_id, 1, {}, owner=owner)
+        store.update_job(job_id, status="completed", result={"events": []})
+
+    assert [s["jobId"] for s in store.list_sessions(owner="user:1")] == ["mine"]
+    assert {s["jobId"] for s in store.list_sessions(owner="browser-a", include_legacy=True)} == {"anon", "legacy"}
+    assert [s["jobId"] for s in store.list_sessions(owner=None)] == ["legacy"]
+    assert len(store.list_sessions()) == 4
+    assert store.job_owner("mine") == (True, "user:1")
+    assert store.job_owner("ghost") == (False, None)
+
+
+def test_claim_moves_anonymous_work_into_the_account(store):
+    store.create_job("j", 1, {}, owner="browser-a")
+    store.add_feedback("browser-a", "j", "e", "w", "l")
+    store.save_preferences("browser-a", {"weights": {}, "n_updates": 3})
+
+    moved = store.claim_anonymous("browser-a", "user:1")
+    assert moved == {"sessions": 1, "feedback": 1, "preferences": 1}
+    assert store.job_owner("j") == (True, "user:1")
+    assert store.count_feedback("user:1") == 1
+    assert store.get_preferences("user:1")["n_updates"] == 3
+
+    # An account's own taste is never overwritten by a later claim.
+    store.save_preferences("browser-b", {"weights": {}, "n_updates": 9})
+    assert store.claim_anonymous("browser-b", "user:1")["preferences"] == 0
+    assert store.get_preferences("user:1")["n_updates"] == 3
+
+
+def test_signed_in_sessions_outlive_anonymous_ones(store):
+    store.create_job("anon", 1, {}, owner="browser-a")
+    store.create_job("user", 1, {}, owner="user:1")
+    with store._conn() as conn:
+        conn.execute("UPDATE jobs SET created_at = created_at - 100000")
+
+    assert store.delete_jobs_older_than(50000, user_max_age_seconds=500000) == ["anon"]
+    assert store.get_job("user") is not None

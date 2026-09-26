@@ -6,9 +6,11 @@ import { Processing } from './pages/Processing';
 import { SmartGallery } from './pages/SmartGallery';
 import { Analysis } from './pages/Analysis';
 import { Sessions } from './pages/Sessions';
+import { Profile } from './pages/Profile';
 import { Navbar } from './components/Navbar';
 import { AppStep, Event, Identity, Photo } from './types';
 import { AnalyzeResult, getSession, sessionPhotoUrl, startAnalysis } from './lib/analysisApi';
+import { startMotion } from './lib/motion';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -77,6 +79,12 @@ const App: React.FC = () => {
   const [galleryEvents, setGalleryEvents] = useState<Event[]>([]);
   const [galleryIdentities, setGalleryIdentities] = useState<Identity[]>([]);
   const [enhancedPhotoIds, setEnhancedPhotoIds] = useState<string[]>([]);
+
+  // GSAP drives every entrance in the app; see lib/motion.ts.
+  useEffect(() => { startMotion(); }, []);
+
+  // A new page starts at the top, like a real navigation would.
+  useEffect(() => { window.scrollTo(0, 0); }, [step]);
 
   // Revoke blob URLs only on unmount. Revoking on every photos change
   // (the old behaviour) destroyed the URLs of photos that were still in the
@@ -194,7 +202,7 @@ const App: React.FC = () => {
   const renderStep = () => {
     switch (step) {
       case AppStep.LANDING:
-        return <Landing />;
+        return <Landing onGetStarted={() => setStep(AppStep.UPLOAD)} />;
       case AppStep.UPLOAD:
         return (
           <UploadView
@@ -248,24 +256,25 @@ const App: React.FC = () => {
             isLoading={isLoadingSession}
           />
         );
+      case AppStep.PROFILE:
+        return <Profile onNavigate={setStep} />;
       case AppStep.FACE_ANALYSIS:
         return <Analysis photos={photos} />;
       default:
-        return <Landing />;
+        return <Landing onGetStarted={() => setStep(AppStep.UPLOAD)} />;
     }
   };
 
   const isLanding = step === AppStep.LANDING;
 
   return (
-    <div className="min-h-screen text-slate-900 transition-colors duration-500">
+    <div className="min-h-screen text-slate-900">
       <Navbar
         currentStep={step}
         setStep={setStep}
-        onLocalUpload={handleLocalUpload}
       />
-      <main className={isLanding ? '' : 'pt-16'} key={step}>
-        <div className={isLanding ? '' : 'page-enter'}>
+      <main className={isLanding ? '' : 'pt-20 sm:pt-24'} key={step}>
+        <div data-anim={isLanding ? undefined : 'page'}>
           {renderStep()}
         </div>
       </main>

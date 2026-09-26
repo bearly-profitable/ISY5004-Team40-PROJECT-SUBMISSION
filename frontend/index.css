@@ -1,37 +1,39 @@
 /* ================================================================
-   LUMINA — LIQUID GLASS DESIGN SYSTEM
-   Apple-inspired frosted glass UI with prismatic animations
+   LUMINA — LUMI DESIGN SYSTEM
+   Soft vinyl-toy glass, built around Lumi's colours: a lavender hood,
+   a rose-to-peach body and a cream face, on warm plum ink.
    ================================================================ */
 
 /* --------------------------------
    1. CSS Custom Properties
    -------------------------------- */
 :root {
-  /* Glass — translucent frosted panels */
-  --glass-bg: rgba(255, 255, 255, 0.18);
-  --glass-bg-heavy: rgba(255, 255, 255, 0.3);
-  --glass-bg-light: rgba(255, 255, 255, 0.12);
-  --glass-border: rgba(255, 255, 255, 0.45);
-  --glass-border-subtle: rgba(255, 255, 255, 0.28);
-  --glass-shadow: rgba(0, 0, 0, 0.04);
-  --glass-shadow-lg: rgba(0, 0, 0, 0.08);
-  --glass-inner-glow: rgba(255, 255, 255, 0.5);
+  /* Lumi's palette */
+  --lumi-rose: #e38c9e;
+  --lumi-peach: #f5bd95;
+  --lumi-cream: #fdf8f3;
+  --lumi-plum: #3a2d4d;
 
-  /* Prismatic palette — warm lavender-to-rose pastels matching the logo */
-  --prism-lavender: rgba(180, 167, 214, 0.55);
-  --prism-rose: rgba(232, 180, 184, 0.5);
-  --prism-peach: rgba(235, 200, 170, 0.45);
-  --prism-mauve: rgba(200, 160, 200, 0.45);
+  /* Glass — frosted cream panels */
+  --glass-bg: rgba(255, 252, 250, 0.55);
+  --glass-bg-heavy: rgba(255, 252, 250, 0.72);
+  --glass-bg-light: rgba(255, 252, 250, 0.38);
+  --glass-border: rgba(255, 255, 255, 0.75);
+  --glass-border-subtle: rgba(255, 255, 255, 0.5);
+  --glass-shadow: rgba(80, 50, 110, 0.07);
+  --glass-shadow-lg: rgba(80, 50, 110, 0.12);
+  --glass-inner-glow: rgba(255, 255, 255, 0.8);
 
-  /* Accent */
-  --accent: #b4a7d6;
-  --accent-rgb: 180, 167, 214;
-  --accent-glow: rgba(180, 167, 214, 0.35);
+  /* Prismatic palette */
+  --prism-rose: rgba(236, 160, 178, 0.5);
+  --prism-peach: rgba(245, 190, 150, 0.5);
+
+  /* Accent: see 1b, per theme */
 
   /* Surface */
-  --bg-primary: #f0e8f3;
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
+  --bg-primary: #f6eef4;
+  --text-primary: #2f2440;
+  --text-secondary: #7d6d8e;
 
   /* Timing functions */
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -39,21 +41,277 @@
   --decel: cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* Dark mode removed — light mode only */
+/* --------------------------------
+   1b. Accent themes
+   Picked per user on the profile page (<html data-accent="…">). Tailwind's
+   lumina-* scale reads these, so one attribute recolours the whole app.
+   -------------------------------- */
+:root, [data-accent="lumi"] {
+  --lumina-50: 246 243 252;
+  --lumina-100: 236 230 248;
+  --lumina-200: 220 209 242;
+  --lumina-300: 196 180 230;
+  --lumina-400: 169 150 214;
+  --lumina-500: 143 123 198;
+  --lumina-600: 122 100 179;
+  --lumina-700: 101 80 154;
+  --lumina-800: 81 64 124;
+  --lumina-900: 63 50 98;
+  --lumi-lavender: #8f7bc6;
+  --lumi-lavender-soft: #c4b4e6;
+  --lumi-gradient: linear-gradient(135deg, #9d88d4 0%, #e38c9e 55%, #f3ad7f 100%);
+  --accent: #8f7bc6;
+  --accent-rgb: 143, 123, 198;
+  --accent-glow: rgba(var(--accent-rgb), 0.3);
+  --jelly-base: var(--jelly-base);
+  --jelly-glow-rgb: 143, 100, 170;
+  --prism-lavender: rgba(170, 150, 220, 0.55);
+  --prism-mauve: rgba(205, 165, 215, 0.45);
+}
+
+[data-accent="rose"] {
+  --lumina-50: 253 242 245;
+  --lumina-100: 251 228 234;
+  --lumina-200: 247 203 215;
+  --lumina-300: 240 164 185;
+  --lumina-400: 230 120 150;
+  --lumina-500: 214 86 122;
+  --lumina-600: 188 62 98;
+  --lumina-700: 156 48 80;
+  --lumina-800: 130 43 70;
+  --lumina-900: 109 40 63;
+  --lumi-lavender: #d6567a;
+  --lumi-lavender-soft: #f0a4b9;
+  --lumi-gradient: linear-gradient(135deg, #d6567a 0%, #e67896 55%, #f3ad7f 100%);
+  --accent: #d6567a;
+  --accent-rgb: 214, 86, 122;
+  --accent-glow: rgba(214, 86, 122, 0.3);
+  --jelly-base: #9c3050;
+  --jelly-glow-rgb: 190, 70, 105;
+  --prism-lavender: rgba(236, 140, 165, 0.5);
+  --prism-mauve: rgba(240, 175, 190, 0.45);
+}
+
+[data-accent="mint"] {
+  --lumina-50: 239 250 246;
+  --lumina-100: 216 243 233;
+  --lumina-200: 180 230 212;
+  --lumina-300: 134 211 186;
+  --lumina-400: 88 185 156;
+  --lumina-500: 58 159 131;
+  --lumina-600: 45 131 108;
+  --lumina-700: 39 105 88;
+  --lumina-800: 34 84 71;
+  --lumina-900: 29 69 59;
+  --lumi-lavender: #3a9f83;
+  --lumi-lavender-soft: #86d3ba;
+  --lumi-gradient: linear-gradient(135deg, #3fae8f 0%, #6cc4a8 55%, #b5d98a 100%);
+  --accent: #3a9f83;
+  --accent-rgb: 58, 159, 131;
+  --accent-glow: rgba(58, 159, 131, 0.3);
+  --jelly-base: #2d836c;
+  --jelly-glow-rgb: 45, 131, 108;
+  --prism-lavender: rgba(120, 205, 175, 0.5);
+  --prism-mauve: rgba(170, 220, 190, 0.45);
+}
+
+[data-accent="honey"] {
+  --lumina-50: 253 248 236;
+  --lumina-100: 250 237 204;
+  --lumina-200: 244 217 149;
+  --lumina-300: 238 194 94;
+  --lumina-400: 229 169 53;
+  --lumina-500: 204 141 31;
+  --lumina-600: 171 111 24;
+  --lumina-700: 136 83 23;
+  --lumina-800: 111 67 24;
+  --lumina-900: 92 56 23;
+  --lumi-lavender: #cc8d1f;
+  --lumi-lavender-soft: #eec25e;
+  --lumi-gradient: linear-gradient(135deg, #d9962a 0%, #eea06c 55%, #f5c46a 100%);
+  --accent: #cc8d1f;
+  --accent-rgb: 204, 141, 31;
+  --accent-glow: rgba(204, 141, 31, 0.3);
+  --jelly-base: #ab6f18;
+  --jelly-glow-rgb: 171, 111, 24;
+  --prism-lavender: rgba(240, 195, 110, 0.5);
+  --prism-mauve: rgba(245, 205, 150, 0.45);
+}
+
+[data-accent="ocean"] {
+  --lumina-50: 240 246 253;
+  --lumina-100: 221 233 250;
+  --lumina-200: 194 216 246;
+  --lumina-300: 152 191 239;
+  --lumina-400: 104 158 229;
+  --lumina-500: 74 128 217;
+  --lumina-600: 56 102 201;
+  --lumina-700: 48 84 168;
+  --lumina-800: 45 71 136;
+  --lumina-900: 41 61 108;
+  --lumi-lavender: #4a80d9;
+  --lumi-lavender-soft: #98bfef;
+  --lumi-gradient: linear-gradient(135deg, #4a80d9 0%, #6aa3e8 55%, #7fd1d8 100%);
+  --accent: #4a80d9;
+  --accent-rgb: 74, 128, 217;
+  --accent-glow: rgba(74, 128, 217, 0.3);
+  --jelly-base: #3054a8;
+  --jelly-glow-rgb: 48, 84, 168;
+  --prism-lavender: rgba(140, 180, 240, 0.5);
+  --prism-mauve: rgba(150, 200, 225, 0.45);
+}
+
+/* Lumi's outfit: a colourway filter on every Lumi sprite (<html data-outfit>).
+   Same hue/saturate values as backend/mascot.py OUTFITS, so the web matches the PDF. */
+:root { --lumi-outfit: hue-rotate(0deg); }
+[data-outfit="mint"] { --lumi-outfit: hue-rotate(-120deg); }
+[data-outfit="honey"] { --lumi-outfit: hue-rotate(25deg); }
+[data-outfit="ocean"] { --lumi-outfit: hue-rotate(210deg); }
+.lumi-sprite { filter: var(--lumi-outfit); }
 
 /* --------------------------------
    2. Base
    -------------------------------- */
 * { -webkit-tap-highlight-color: transparent; }
 
+html { scroll-behavior: auto; }
+
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Nunito', ui-rounded, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background 0.6s var(--smooth), color 0.6s var(--smooth);
+}
+
+.font-display, h1, h2 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-variation-settings: 'SOFT' 100, 'opsz' 96;
+  letter-spacing: -0.015em;
+}
+
+::selection { background: rgba(227, 140, 158, 0.3); }
+
+:focus-visible {
+  outline: 2.5px solid var(--lumi-lavender);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+/* --------------------------------
+   2b. Lumi building blocks
+   -------------------------------- */
+
+/* A squishy, toy-like primary button: a gradient pill that sits on a
+   darker "base", so pressing it visibly pushes it down. */
+.btn-jelly {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 999px;
+  padding: 0.85rem 1.6rem;
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  color: #fff;
+  background: var(--lumi-gradient);
+  box-shadow:
+    0 4px 0 var(--jelly-base),
+    0 12px 28px rgba(var(--jelly-glow-rgb), 0.35),
+    inset 0 2px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 0.15s var(--smooth), box-shadow 0.15s var(--smooth), filter 0.2s;
+  text-shadow: 0 1px 1px rgba(80, 40, 100, 0.25);
+  white-space: nowrap;
+}
+.btn-jelly:hover { filter: brightness(1.05) saturate(1.05); }
+.btn-jelly:active {
+  transform: translateY(3px);
+  box-shadow:
+    0 1px 0 var(--jelly-base),
+    0 6px 14px rgba(var(--jelly-glow-rgb), 0.3),
+    inset 0 2px 0 rgba(255, 255, 255, 0.35);
+}
+.btn-jelly:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-jelly-sm { padding: 0.55rem 1.1rem; font-size: 0.8rem; }
+
+/* The quiet partner to .btn-jelly. */
+.btn-soft {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  padding: 0.8rem 1.4rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--lumi-plum);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1.5px solid rgba(var(--accent-rgb), 0.25);
+  box-shadow: 0 3px 0 rgba(var(--accent-rgb), 0.18);
+  transition: transform 0.15s var(--smooth), background 0.2s, box-shadow 0.15s;
+}
+.btn-soft:hover { background: #fff; }
+.btn-soft:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(var(--accent-rgb), 0.18); }
+
+/* Lumi's speech bubble. The tail points at Lumi from whichever side the
+   bubble sits on (data-tail="left" | "right" | "bottom"). */
+.lumi-bubble {
+  position: relative;
+  background: #fff;
+  color: var(--lumi-plum);
+  border-radius: 20px;
+  padding: 0.7rem 1rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(80, 50, 110, 0.12), 0 1px 0 rgba(var(--accent-rgb), 0.15);
+}
+.lumi-bubble::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 3px;
+  transform: rotate(45deg);
+}
+.lumi-bubble[data-tail="left"]::after { left: -6px; top: calc(50% - 8px); }
+.lumi-bubble[data-tail="right"]::after { right: -6px; top: calc(50% - 8px); }
+.lumi-bubble[data-tail="bottom"]::after { bottom: -6px; left: calc(50% - 8px); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--lumi-lavender);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.text-lumi-gradient {
+  background: var(--lumi-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Lumi sprites never get dragged around like photos. */
+.lumi-sprite { user-select: none; -webkit-user-drag: none; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 
 /* --------------------------------
@@ -163,77 +421,44 @@ body {
 }
 
 /* --------------------------------
-   6. Animated Mesh Background
+   6. Drifting Mesh Background
+   The orbs are moved by GSAP (lib/motion.ts), not CSS keyframes.
    -------------------------------- */
 .bg-mesh {
   position: fixed;
   inset: 0;
   z-index: -1;
   overflow: hidden;
-  background: linear-gradient(145deg, #ece4f4 0%, #f2e0e8 25%, #f5e6de 50%, #ecdaf0 75%, #f8e4e8 100%);
-  transition: background 0.6s var(--smooth);
+  background: linear-gradient(160deg, #f3ecf8 0%, #f8eaee 40%, #fbefe6 75%, #f5ebf6 100%);
 }
 
 .mesh-orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.85;
+  filter: blur(70px);
+  opacity: 0.8;
   will-change: transform;
 }
 
 .mesh-orb-1 {
-  width: 700px;
-  height: 700px;
+  width: min(700px, 90vw); height: min(700px, 90vw);
   background: radial-gradient(circle, var(--prism-lavender) 0%, transparent 70%);
-  top: -15%;
-  left: -10%;
-  animation: orbDrift1 28s ease-in-out infinite;
+  top: -15%; left: -12%;
 }
-
 .mesh-orb-2 {
-  width: 600px;
-  height: 600px;
+  width: min(600px, 85vw); height: min(600px, 85vw);
   background: radial-gradient(circle, var(--prism-rose) 0%, transparent 70%);
-  bottom: -15%;
-  right: -8%;
-  animation: orbDrift2 32s ease-in-out infinite;
+  bottom: -15%; right: -10%;
 }
-
 .mesh-orb-3 {
-  width: 500px;
-  height: 500px;
+  width: min(520px, 80vw); height: min(520px, 80vw);
   background: radial-gradient(circle, var(--prism-peach) 0%, transparent 70%);
-  top: 35%;
-  left: 25%;
-  animation: orbDrift3 24s ease-in-out infinite;
+  top: 40%; left: 30%;
 }
-
 .mesh-orb-4 {
-  width: 450px;
-  height: 450px;
+  width: min(460px, 75vw); height: min(460px, 75vw);
   background: radial-gradient(circle, var(--prism-mauve) 0%, transparent 70%);
-  top: 10%;
-  right: 15%;
-  animation: orbDrift4 26s ease-in-out infinite;
-}
-
-.mesh-orb-5 {
-  width: 550px;
-  height: 550px;
-  background: radial-gradient(circle, rgba(210, 180, 220, 0.35) 0%, transparent 70%);
-  bottom: 10%;
-  left: 10%;
-  animation: orbDrift1 34s ease-in-out infinite reverse;
-}
-
-.mesh-orb-6 {
-  width: 480px;
-  height: 480px;
-  background: radial-gradient(circle, rgba(240, 195, 185, 0.3) 0%, transparent 70%);
-  top: 55%;
-  right: 30%;
-  animation: orbDrift3 30s ease-in-out infinite reverse;
+  top: 5%; right: 12%;
 }
 
 /* --------------------------------
@@ -402,33 +627,10 @@ body {
 }
 
 /* --------------------------------
-   8. Animation Utility Classes
+   8. Continuous loops (entrances are GSAP; see lib/motion.ts)
    -------------------------------- */
-.anim-fade-in-up    { animation: fadeInUp 0.8s var(--smooth) both; }
-.anim-fade-in-down  { animation: fadeInDown 0.8s var(--smooth) both; }
-.anim-fade-in-left  { animation: fadeInLeft 0.8s var(--smooth) both; }
-.anim-fade-in-right { animation: fadeInRight 0.8s var(--smooth) both; }
-.anim-scale-in      { animation: scaleIn 0.7s var(--spring) both; }
-.anim-scale-bounce  { animation: scaleInBounce 0.8s var(--spring) both; }
-.anim-float         { animation: float 6s ease-in-out infinite; }
-.anim-float-slow    { animation: floatSlow 8s ease-in-out infinite; }
-.anim-breathe       { animation: breathe 4s ease-in-out infinite; }
-.anim-glow          { animation: glowPulse 3s ease-in-out infinite; }
-.anim-spin-slow     { animation: spinSlow 20s linear infinite; }
-
-/* Stagger delays */
-.d-0    { animation-delay: 0ms; }
-.d-100  { animation-delay: 100ms; }
-.d-200  { animation-delay: 200ms; }
-.d-300  { animation-delay: 300ms; }
-.d-400  { animation-delay: 400ms; }
-.d-500  { animation-delay: 500ms; }
-.d-600  { animation-delay: 600ms; }
-.d-700  { animation-delay: 700ms; }
-.d-800  { animation-delay: 800ms; }
-.d-900  { animation-delay: 900ms; }
-.d-1000 { animation-delay: 1000ms; }
-.d-1200 { animation-delay: 1200ms; }
+.anim-float   { animation: float 6s ease-in-out infinite; }
+.anim-breathe { animation: breathe 4s ease-in-out infinite; }
 
 /* --------------------------------
    9. Glass Buttons
@@ -669,13 +871,6 @@ body {
 }
 
 /* --------------------------------
-   15. Page Transitions
-   -------------------------------- */
-.page-enter {
-  animation: fadeInUp 0.65s var(--decel) both;
-}
-
-/* --------------------------------
    16. Scrollbar & Selection
    -------------------------------- */
 ::-webkit-scrollbar { width: 6px; }
@@ -846,300 +1041,4 @@ body {
 .gallery-card:hover {
   transform: translateY(-4px) scale(1.015);
   box-shadow: 0 20px 60px rgba(0,0,0,0.22), 0 4px 16px rgba(0,0,0,0.12);
-}
-
-/* ================================
-   19. WebGL Interactive Slider
-   ================================ */
-.slider-wrapper {
-  position: relative;
-  width: 100%;
-  height: 100vh;
-  overflow: hidden;
-  opacity: 0;
-  transition: opacity 1s ease;
-}
-
-.slider-wrapper.loaded {
-  opacity: 1;
-}
-
-.webgl-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100% !important;
-  height: 100% !important;
-  display: block;
-  z-index: 0;
-}
-
-/* Slide counter */
-.slide-number,
-.slide-total {
-  position: absolute;
-  font-family: 'Inter', sans-serif;
-  font-weight: 200;
-  letter-spacing: 0.06em;
-  color: rgba(255, 255, 255, 0.25);
-  z-index: 10;
-  pointer-events: none;
-}
-
-.slide-number {
-  bottom: 32px;
-  left: 40px;
-  font-size: clamp(3rem, 8vw, 6rem);
-  line-height: 1;
-}
-
-.slide-total {
-  bottom: 32px;
-  right: 40px;
-  font-size: clamp(0.75rem, 1.2vw, 1rem);
-}
-
-/* Slide content overlay */
-.slide-content {
-  position: absolute;
-  bottom: clamp(110px, 18vh, 180px);
-  left: clamp(24px, 5vw, 60px);
-  z-index: 10;
-  pointer-events: none;
-  max-width: min(600px, 60vw);
-}
-
-.slide-title {
-  font-family: 'Inter', sans-serif;
-  font-weight: 500;
-  font-size: clamp(2rem, 5vw, 3.8rem);
-  color: #fff;
-  line-height: 1.1;
-  letter-spacing: 0.01em;
-  margin: 0 0 14px 0;
-  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.25);
-}
-
-.slide-description {
-  font-family: 'Inter', sans-serif;
-  font-weight: 300;
-  font-size: clamp(0.8rem, 1.3vw, 1rem);
-  color: rgba(255, 255, 255, 0.55);
-  line-height: 1.7;
-  letter-spacing: 0.02em;
-  margin: 0;
-  max-width: 420px;
-}
-
-/* Vertical navigation list */
-.slides-navigation {
-  position: absolute;
-  right: clamp(20px, 4vw, 50px);
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.slide-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 0;
-  cursor: pointer;
-  transition: opacity 0.4s ease;
-  opacity: 0.35;
-  position: relative;
-}
-
-.slide-nav-item:hover {
-  opacity: 0.7;
-}
-
-.slide-nav-item.active {
-  opacity: 1;
-}
-
-.slide-progress-line {
-  width: 40px;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 2px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.slide-progress-fill {
-  width: 0%;
-  height: 100%;
-  background: #fff;
-  border-radius: 2px;
-  transition: width 0.1s ease, opacity 0.3s ease;
-}
-
-.slide-nav-title {
-  font-family: 'Inter', sans-serif;
-  font-weight: 400;
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.7);
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-  transition: color 0.3s ease;
-}
-
-.slide-nav-item.active .slide-nav-title {
-  color: #fff;
-  font-weight: 500;
-}
-
-/* Landing CTA overlay */
-.landing-cta-overlay {
-  position: absolute;
-  bottom: clamp(24px, 4vh, 48px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  pointer-events: auto;
-}
-
-.landing-cta-overlay .cta-btn {
-  background: linear-gradient(135deg, #b4a7d6, #d4a0b0);
-  color: #fff;
-  border: none;
-  padding: 14px 36px;
-  border-radius: 16px;
-  font-family: 'Inter', sans-serif;
-  font-weight: 700;
-  font-size: 0.95rem;
-  letter-spacing: -0.01em;
-  cursor: pointer;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 8px 32px rgba(180, 167, 214, 0.35);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.landing-cta-overlay .cta-btn:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 12px 44px rgba(180, 167, 214, 0.45);
-  filter: brightness(1.1);
-}
-
-.landing-cta-overlay .cta-btn:active {
-  transform: translateY(0) scale(0.97);
-}
-
-.landing-cta-overlay .cta-error {
-  font-size: 0.8rem;
-  color: #f87171;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-}
-
-/* Gradient vignette overlay for readability */
-.slider-vignette {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  pointer-events: none;
-  background:
-    linear-gradient(to top, rgba(0, 0, 0, 0.55) 0%, transparent 45%),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.2) 0%, transparent 20%),
-    linear-gradient(to right, rgba(0, 0, 0, 0.15) 0%, transparent 30%);
-}
-
-/* Mobile responsive adjustments for slider */
-@media (max-width: 768px) {
-  .slide-content {
-    bottom: clamp(130px, 22vh, 200px);
-    left: 20px;
-    right: 80px;
-    max-width: none;
-  }
-
-  .slide-title {
-    font-size: clamp(1.6rem, 7vw, 2.8rem);
-  }
-
-  .slides-navigation {
-    right: 14px;
-    gap: 0;
-  }
-
-  .slide-nav-title {
-    display: none;
-  }
-
-  .slide-progress-line {
-    width: 28px;
-  }
-
-  .slide-nav-item {
-    padding: 10px 0;
-  }
-
-  .slide-number {
-    left: 20px;
-    bottom: 20px;
-    font-size: clamp(2.5rem, 10vw, 4rem);
-  }
-
-  .slide-total {
-    right: 20px;
-    bottom: 20px;
-  }
-
-  .landing-cta-overlay {
-    bottom: 20px;
-    left: 20px;
-    right: 20px;
-    transform: none;
-  }
-
-  .landing-cta-overlay .cta-btn {
-    width: 100%;
-    justify-content: center;
-    padding: 16px 24px;
-  }
-}
-
-/* ------------------------------------------------------------------
-   Album flip-book
-   A leaf hinged at the spine sweeps through 180 degrees. The sheen
-   layers brighten as the page lifts and fall away as it lands, which
-   is what sells the rotation as paper rather than a rotating rectangle.
-   ------------------------------------------------------------------ */
-@keyframes albumLeafForward {
-  from { transform: rotateY(0deg); }
-  to   { transform: rotateY(-180deg); }
-}
-
-@keyframes albumLeafBack {
-  from { transform: rotateY(-180deg); }
-  to   { transform: rotateY(0deg); }
-}
-
-.album-leaf-sheen {
-  pointer-events: none;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 45%);
-  animation: albumSheen 720ms cubic-bezier(0.42, 0, 0.28, 1) both;
-}
-
-.album-leaf-sheen--back {
-  background: linear-gradient(270deg, rgba(0, 0, 0, 0.3) 0%, rgba(0, 0, 0, 0) 55%);
-}
-
-@keyframes albumSheen {
-  0%   { opacity: 0; }
-  45%  { opacity: 1; }
-  100% { opacity: 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .album-leaf-sheen { animation: none; opacity: 0; }
 }

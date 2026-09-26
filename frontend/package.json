@@ -10,8 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "react": "^19.2.4",
+    "@gsap/react": "^2.1.2",
+    "@supabase/supabase-js": "^2.117.2",
+    "gsap": "^3.15.0",
     "lucide-react": "^0.563.0",
+    "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
   "devDependencies": {

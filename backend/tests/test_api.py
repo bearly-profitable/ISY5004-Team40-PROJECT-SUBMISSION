@@ -385,3 +385,63 @@ def test_enhance_404s_for_unknown_ids(client, monkeypatch):
                             json={"jobId": job_id, "photoId": "ghost"}).status_code == 404
     assert test_client.post("/api/enhance",
                             json={"jobId": "nope", "photoId": "photo-a"}).status_code == 404
+
+
+def _as_user(server, monkeypatch, tokens):
+    """Pretend Supabase is configured and accepts `tokens` (token -> user id)."""
+    import auth
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
+
+    def fake_verify(token):
+        if token not in tokens:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=401, detail="bad token")
+        return tokens[token]
+
+    monkeypatch.setattr(auth, "_verify", fake_verify)
+
+
+def test_signed_in_sessions_are_private_and_claimable(client, monkeypatch):
+    test_client, server = client
+    _as_user(server, monkeypatch, {"tok-1": "u1", "tok-2": "u2"})
+    browser = {"X-Client-Id": "browser-claim"}
+    u1 = {**browser, "Authorization": "Bearer tok-1"}
+    u2 = {"X-Client-Id": "other", "Authorization": "Bearer tok-2"}
+
+    # Made while signed out on this browser ...
+    files = [("files", ("a.jpg", io.BytesIO(TINY_JPEG), "image/jpeg"))]
+    meta = json.dumps([{"id": "photo-a", "name": "a.jpg", "size": "1 KB"}])
+    job_id = test_client.post("/api/analyze", headers=browser, files=files,
+                              data={"photoMeta": meta}).json()["jobId"]
+    server.job_queue.join()
+    assert all(s["jobId"] != job_id for s in test_client.get("/api/sessions", headers=u1).json()["sessions"])
+
+    # ... then claimed by the account that signs in there.
+    assert test_client.post("/api/account/claim", headers=u1).json()["sessions"] == 1
+    listing = test_client.get("/api/sessions", headers=u1).json()
+    assert listing["signedIn"] is True
+    assert any(s["jobId"] == job_id for s in listing["sessions"])
+
+    # Nobody else sees or deletes it.
+    assert all(s["jobId"] != job_id for s in test_client.get("/api/sessions", headers=u2).json()["sessions"])
+    assert all(s["jobId"] != job_id for s in test_client.get("/api/sessions").json()["sessions"])
+    assert test_client.delete(f"/api/sessions/{job_id}", headers=u2).status_code == 404
+    assert test_client.delete(f"/api/sessions/{job_id}", headers=u1).status_code == 200
+
+    assert test_client.get("/api/sessions", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
+def test_hand_tuned_weights_are_normalised(client):
+    test_client, server = client
+    headers = {"X-Client-Id": "tuner"}
+    weights = {k: 1.0 for k in server.DEFAULT_WEIGHTS}
+    resp = test_client.put("/api/preferences", headers=headers, json={"weights": weights})
+    assert resp.status_code == 200
+    got = resp.json()["weights"]
+    assert abs(sum(got.values()) - 1.0) < 1e-6
+    assert abs(got["ear"] - 1 / len(weights)) < 1e-6
+    assert test_client.get("/api/preferences", headers=headers).json()["weights"] == got
+
+    bad = test_client.put("/api/preferences", headers=headers, json={"weights": {"ear": 1.0}})
+    assert bad.status_code == 400
