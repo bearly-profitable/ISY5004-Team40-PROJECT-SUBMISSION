@@ -1,14 +1,17 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Menu, X, LogIn, ChevronRight } from 'lucide-react';
+import { Menu, X, LogIn, ChevronRight, Lock } from 'lucide-react';
 import { AppStep } from '../types';
 import { gsap, prefersReducedMotion } from '../lib/motion';
 import { useAuth } from '../lib/auth';
 import { firstName } from '../lib/profile';
 import { ProfileAvatar } from './ProfileAvatar';
+import { MEMBER_STEPS } from './SignInGate';
 
 interface NavbarProps {
   currentStep: AppStep;
   setStep: (step: AppStep) => void;
+  /** Sign in (App remembers which tab the visitor wanted). */
+  onLogIn?: () => void;
 }
 
 const NAV_ITEMS = [
@@ -18,13 +21,17 @@ const NAV_ITEMS = [
   { label: 'Sessions', step: AppStep.SESSIONS },
 ];
 
-export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep }) => {
+export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep, onLogIn }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
   const { user, profile, loading, signInWithGoogle } = useAuth();
+  const logIn = onLogIn ?? signInWithGoogle;
+  const signedOut = !loading && !user;
+  // A members-only page is showing Lumi's gate: make the button Lumi means glow.
+  const beckoning = signedOut && MEMBER_STEPS.has(currentStep);
   const hidden = useRef(false);
   const lastY = useRef(0);
 
@@ -104,7 +111,12 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep }) => {
                     active ? 'text-lumina-700' : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  {item.label}
+                  <span className="inline-flex items-center gap-1">
+                    {signedOut && MEMBER_STEPS.has(item.step) && (
+                      <Lock className="w-3 h-3 opacity-60" aria-label="Log in required" />
+                    )}
+                    {item.label}
+                  </span>
                 </button>
               );
             })}
@@ -133,7 +145,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep }) => {
                 </span>
               </button>
             ) : (
-              <button onClick={signInWithGoogle} className="btn-jelly btn-jelly-sm hidden sm:inline-flex">
+              <button onClick={logIn} className={`btn-jelly btn-jelly-sm hidden sm:inline-flex ${beckoning ? 'login-beacon' : ''}`}>
                 <LogIn className="w-3.5 h-3.5" /> Log in
               </button>
             ))}
@@ -152,7 +164,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep }) => {
           <div ref={sheetRef} className="md:hidden max-w-6xl mx-auto mt-2 liquid-glass-heavy rounded-[28px] p-3">
             <div data-item className="flex items-center gap-2 px-2 pb-2">
               <img src="/lumi/point.webp" alt="" aria-hidden className="lumi-sprite h-14 w-auto" />
-              <span className="lumi-bubble text-sm" data-tail="left">Where to?</span>
+              <span className="lumi-bubble text-sm" data-tail="left">{signedOut ? 'Log in first, then anywhere!' : 'Where to?'}</span>
             </div>
             {NAV_ITEMS.map((item) => (
               <button
@@ -160,11 +172,14 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep }) => {
                 data-item
                 onClick={() => go(item.step)}
                 aria-current={currentStep === item.step ? 'page' : undefined}
-                className={`w-full text-left px-4 py-3.5 rounded-2xl text-base font-extrabold ${
+                className={`w-full text-left px-4 py-3.5 rounded-2xl text-base font-extrabold flex items-center justify-between ${
                   currentStep === item.step ? 'bg-white text-lumina-700' : 'text-slate-600'
                 }`}
               >
                 {item.label}
+                {signedOut && MEMBER_STEPS.has(item.step) && (
+                  <Lock className="w-4 h-4 opacity-50" aria-label="Log in required" />
+                )}
               </button>
             ))}
             {!loading && (user ? (
@@ -184,7 +199,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep }) => {
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </button>
             ) : (
-              <button data-item onClick={signInWithGoogle} className="btn-jelly w-full mt-2">
+              <button data-item onClick={() => { setMobileOpen(false); logIn(); }} className={`btn-jelly w-full mt-2 ${beckoning ? 'login-beacon' : ''}`}>
                 <LogIn className="w-4 h-4" /> Log in with Google
               </button>
             ))}

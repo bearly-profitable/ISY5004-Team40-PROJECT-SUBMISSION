@@ -8,15 +8,20 @@ import { Analysis } from './pages/Analysis';
 import { Sessions } from './pages/Sessions';
 import { Profile } from './pages/Profile';
 import { Navbar } from './components/Navbar';
+import { MEMBER_STEPS, SignInGate } from './components/SignInGate';
 import { AppStep, Event, Identity, Photo } from './types';
 import { AnalyzeResult, getSession, sessionPhotoUrl, startAnalysis } from './lib/analysisApi';
 import { startMotion } from './lib/motion';
+import { useAuth } from './lib/auth';
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+// Where to go once the Google round-trip brings a visitor back signed in.
+const AFTER_LOGIN_KEY = 'lumina-after-login';
 
 // Raised from 80: the backend embedding cache + job queue handle larger
 // batches, and re-runs of previously analysed photos skip inference entirely.
@@ -79,6 +84,50 @@ const App: React.FC = () => {
   const [galleryEvents, setGalleryEvents] = useState<Event[]>([]);
   const [galleryIdentities, setGalleryIdentities] = useState<Identity[]>([]);
   const [enhancedPhotoIds, setEnhancedPhotoIds] = useState<string[]>([]);
+  const { user, loading: authLoading, signInWithGoogle } = useAuth();
+
+  /** Sign in, remembering the members-only tab the visitor was trying to open. */
+  const logIn = useCallback(() => {
+    // A gallery or a running analysis lives in memory and won't survive the
+    // redirect, so those come back to their saved copy on the Sessions tab.
+    const back = step === AppStep.UPLOAD ? AppStep.UPLOAD
+      : MEMBER_STEPS.has(step) ? AppStep.SESSIONS : null;
+    try {
+      if (back) sessionStorage.setItem(AFTER_LOGIN_KEY, back);
+    } catch { /* private mode: they land on Home instead */ }
+    void signInWithGoogle();
+  }, [step, signInWithGoogle]);
+
+  // Back from Google: carry on where they were headed.
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      const back = sessionStorage.getItem(AFTER_LOGIN_KEY) as AppStep | null;
+      sessionStorage.removeItem(AFTER_LOGIN_KEY);
+      if (back && MEMBER_STEPS.has(back)) setStep(back);
+    } catch { /* storage blocked */ }
+  }, [userId]);
+
+  // Signing out drops the photos and results held in memory, so the next
+  // person on this browser starts from nothing.
+  const prevUserId = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevUserId.current && !userId) {
+      for (const photo of photosRef.current) {
+        if (photo.url.startsWith('blob:')) URL.revokeObjectURL(photo.url);
+      }
+      setPhotos([]);
+      setGalleryPhotoPool([]);
+      setGalleryEvents([]);
+      setGalleryIdentities([]);
+      setEnhancedPhotoIds([]);
+      setAnalysisJobId(null);
+      setGalleryJobId(null);
+      setAnalysisError(null);
+    }
+    prevUserId.current = userId;
+  }, [userId]);
 
   // GSAP drives every entrance in the app; see lib/motion.ts.
   useEffect(() => { startMotion(); }, []);
@@ -212,6 +261,11 @@ const App: React.FC = () => {
   };
 
   const renderStep = () => {
+    // Upload, gallery and sessions belong to an account: Lumi sends visitors
+    // to the Log in button first.
+    if (MEMBER_STEPS.has(step) && !user) {
+      return <SignInGate step={step} onLogIn={logIn} checking={authLoading} />;
+    }
     switch (step) {
       case AppStep.LANDING:
         return <Landing onGetStarted={() => setStep(AppStep.UPLOAD)} />;
@@ -284,6 +338,7 @@ const App: React.FC = () => {
       <Navbar
         currentStep={step}
         setStep={setStep}
+        onLogIn={logIn}
       />
       <main className={isLanding ? '' : 'pt-20 sm:pt-24'} key={step}>
         <div data-anim={isLanding ? undefined : 'page'}>

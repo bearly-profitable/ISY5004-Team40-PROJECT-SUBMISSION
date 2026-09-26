@@ -281,6 +281,24 @@ body {
 .lumi-bubble[data-tail="left"]::after { left: -6px; top: calc(50% - 8px); }
 .lumi-bubble[data-tail="right"]::after { right: -6px; top: calc(50% - 8px); }
 .lumi-bubble[data-tail="bottom"]::after { bottom: -6px; left: calc(50% - 8px); }
+.lumi-bubble[data-tail="bottom-left"]::after { bottom: -6px; left: 22%; }
+
+/* A ring that ripples out of the Log in button while a members-only page is
+   waiting for the visitor to sign in. */
+.login-beacon { position: relative; }
+.login-beacon::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 2px solid rgb(var(--lumina-400));
+  pointer-events: none;
+  animation: login-beacon 1.8s ease-out infinite;
+}
+@keyframes login-beacon {
+  0% { opacity: 0.9; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.18); }
+}
 
 .chip {
   display: inline-flex;
