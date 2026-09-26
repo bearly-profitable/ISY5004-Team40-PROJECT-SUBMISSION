@@ -93,6 +93,93 @@ def video(label: str, prompt: str, out: Path, *, first: Path, last: Path,
     return out
 
 
+def audio(label: str, prompt: str, out: Path, *, model: str, estimate: float,
+          voice: str | None = None, fmt: str = "wav", system: str | None = None) -> Path:
+    """Audio from a chat model (Lyria music, gpt-audio speech), saved to `out`.
+
+    Audio output is streamed: the base64 arrives in pieces in
+    choices[0].delta.audio.data and is joined at the end.
+    """
+    guard(estimate)
+    audio_cfg: dict = {"format": fmt}
+    if voice:
+        audio_cfg["voice"] = voice
+    messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+    pieces: list[str] = []
+    transcript: list[str] = []
+    cost = None
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        with client.stream("POST", f"{BASE}/chat/completions", headers=_headers(), json={
+            "model": model,
+            "modalities": ["text", "audio"],
+            "audio": audio_cfg,
+            "stream": True,
+            "usage": {"include": True},
+            "messages": messages,
+        }) as r:
+            if r.status_code != 200:
+                raise SystemExit(f"{label}: HTTP {r.status_code} {r.read()[:400]!r}")
+            for line in r.iter_lines():
+                if not line.startswith("data: ") or line == "data: [DONE]":
+                    continue
+                chunk = json.loads(line[6:])
+                if chunk.get("usage"):
+                    cost = chunk["usage"].get("cost", cost)
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    sound = delta.get("audio") or {}
+                    if sound.get("data"):
+                        pieces.append(sound["data"])
+                    if sound.get("transcript"):
+                        transcript.append(sound["transcript"])
+                    if delta.get("content"):
+                        transcript.append(delta["content"])
+    record(label, float(cost if cost is not None else estimate))
+    if not pieces:
+        raise SystemExit(f"{label}: no audio returned. {''.join(transcript)[:300]}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data = base64.b64decode("".join(pieces))
+    if fmt == "pcm16":  # raw 24 kHz mono samples: give them a WAV header
+        import wave
+        with wave.open(str(out), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(data)
+    else:
+        out.write_bytes(data)
+    print(f"  saved {out.name} ({out.stat().st_size / 1e3:.0f} KB) {''.join(transcript)[:120]!r}")
+    return out
+
+
+def text_video(label: str, prompt: str, out: Path, *, model: str = "google/veo-3.1-lite",
+               duration: int = 4, estimate: float = 0.20) -> Path:
+    """A clip from text alone, with Veo's own soundtrack, saved as MP4."""
+    guard(estimate)
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        r = client.post(f"{BASE}/videos", headers=_headers(), json={
+            "model": model, "prompt": prompt, "duration": duration,
+            "resolution": "720p", "aspect_ratio": "16:9", "generate_audio": True,
+        })
+        if r.status_code not in (200, 201, 202):
+            raise SystemExit(f"{label}: HTTP {r.status_code} {r.text[:400]}")
+        job = r.json()
+        print(f"  {label}: job {job['id']} submitted", flush=True)
+        while True:
+            time.sleep(15)
+            status = client.get(f"{BASE}/videos/{job['id']}", headers=_headers()).json()
+            if status.get("status") in ("completed", "failed", "cancelled", "error"):
+                break
+        if status.get("status") != "completed":
+            record(f"{label} (failed)", float((status.get("usage") or {}).get("cost") or 0.0))
+            raise SystemExit(f"{label}: {status.get('status')} {str(status)[:400]}")
+        record(label, float((status.get("usage") or {}).get("cost") or estimate))
+        content = client.get(status["unsigned_urls"][0], headers=_headers(), follow_redirects=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(content.content)
+    return out
+
+
 def image(label: str, prompt: str, out: Path, *, refs: tuple[Path, ...] = (),
           aspect: str = "1:1", size: str = "1K", model: str = IMAGE_MODEL,
           estimate: float = 0.10) -> Path:

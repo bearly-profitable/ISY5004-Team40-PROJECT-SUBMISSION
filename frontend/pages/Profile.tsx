@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Camera, CalendarDays, Check, Heart, ImageIcon, Loader2, LogIn, LogOut, Palette,
+  Camera, CalendarDays, Check, ImageIcon, Loader2, LogIn, LogOut, Palette,
   RotateCcw, Sparkles, SlidersHorizontal, Upload, UserRound, Users, Wand2,
 } from 'lucide-react';
 import { AppStep, type NormSignals, type SignalKey } from '../types';
@@ -68,7 +68,7 @@ const RANKS = [
   { min: 1500, name: 'Legendary curator', pose: 'star' as const },
 ];
 
-interface Stats { sessions: number; photos: number; moments: number; people: number; picks: number }
+interface Stats { sessions: number; photos: number; moments: number; people: number }
 
 const StatsStrip: React.FC<{ stats: Stats | null; error: string | null }> = ({ stats, error }) => {
   const rankIndex = stats ? RANKS.reduce((acc, r, i) => (stats.photos >= r.min ? i : acc), 0) : 0;
@@ -81,7 +81,6 @@ const StatsStrip: React.FC<{ stats: Stats | null; error: string | null }> = ({ s
     { label: 'Photos sorted', value: stats?.photos, icon: <ImageIcon className="w-4 h-4" /> },
     { label: 'Moments found', value: stats?.moments, icon: <Sparkles className="w-4 h-4" /> },
     { label: 'Faces met', value: stats?.people, icon: <Users className="w-4 h-4" /> },
-    { label: 'Picks taught', value: stats?.picks, icon: <Heart className="w-4 h-4" /> },
   ];
 
   return (
@@ -106,7 +105,7 @@ const StatsStrip: React.FC<{ stats: Stats | null; error: string | null }> = ({ s
             )}
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 flex-1">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 flex-1">
           {tiles.map((t) => (
             <div key={t.label} className="rounded-2xl bg-white/70 px-3 py-3">
               <div className="flex items-center gap-1.5 text-lumina-500">{t.icon}</div>
@@ -286,7 +285,7 @@ export const Profile: React.FC<ProfileProps> = ({ onNavigate }) => {
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const flashTimer = useRef<number>();
+  const flashTimer = useRef<number | undefined>(undefined);
 
   const showFlash = (message: string) => {
     setFlash(message);
@@ -305,14 +304,13 @@ export const Profile: React.FC<ProfileProps> = ({ onNavigate }) => {
 
   useEffect(() => {
     if (!user) return;
-    Promise.all([listSessions(), getPreferences().catch(() => null)])
-      .then(([sessions, prefs]) => {
+    listSessions()
+      .then((sessions) => {
         setStats({
           sessions: sessions.length,
           photos: sessions.reduce((a, s) => a + (s.numPhotos || 0), 0),
           moments: sessions.reduce((a, s) => a + (s.summary?.numEvents || 0), 0),
           people: sessions.reduce((a, s) => a + (s.summary?.numIdentities || 0), 0),
-          picks: prefs?.feedbackCount ?? prefs?.nUpdates ?? 0,
         });
       })
       .catch(() => setStatsError('Could not reach the Lumina backend for your stats.'));
@@ -555,8 +553,8 @@ export const Profile: React.FC<ProfileProps> = ({ onNavigate }) => {
         {/* ---- gallery defaults ---- */}
         <Card title="Album & edit defaults" icon={<Wand2 className="w-4 h-4" />} hint="Where the gallery starts when you make an album or enhance a photo. You can still change them each time.">
           <p className="text-xs font-bold text-slate-500 mb-2">PDF album theme</p>
-          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-3 xl:grid-cols-5 gap-2">
-            {FALLBACK_COLLAGE_THEMES.map((t) => (
+          <div className="grid grid-cols-3 gap-2">
+            {FALLBACK_COLLAGE_THEMES.filter((t) => t.key !== 'mono').map((t) => (
               <Pick key={t.key} label={`${t.name} album theme`} selected={profile.collage_theme === t.key} onClick={() => save({ collage_theme: t.key }, `${t.name} albums`)} className="p-1.5">
                 <span className="flex h-10 rounded-lg overflow-hidden" style={{ background: t.bgTop }}>
                   <span className="flex-1" />

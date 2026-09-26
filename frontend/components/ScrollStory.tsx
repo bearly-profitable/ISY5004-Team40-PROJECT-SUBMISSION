@@ -7,7 +7,9 @@
  * use for "scroll to play". Story beats fade in over the film at the points
  * where each clip begins.
  *
- * Phones get their own frame set: a square crop from the centre of the 16:9
+ * Each screen loads one of three frame sets: 1440p where the canvas is big
+ * enough to show the difference (retina laptops, 1080p+ monitors), 1080p for
+ * smaller windows, and for phones a square crop from the centre of the 16:9
  * film, since Lumi is always framed in the middle third.
  */
 import React, { useEffect, useRef, useState } from 'react';
@@ -18,8 +20,20 @@ import { gsap, prefersReducedMotion } from '../lib/motion';
 import film from '../lib/landingFilm.json';
 
 const FRAME_COUNT: number = film.frames;
-const frameUrl = (set: 'd' | 'm', i: number) =>
+type FrameSet = 'h' | 'd' | 'm';
+const frameUrl = (set: FrameSet, i: number) =>
   `/landing/${set}/${String(i + 1).padStart(4, '0')}.webp`;
+
+const PHONE_QUERY = '(max-width: 767px)';
+
+/** The frame set for this screen. The canvas is drawn in device pixels (DPR
+ *  capped at 2), so past ~1600 of them the 1080p frames would be stretched
+ *  visibly soft and the 1440p set is worth its extra weight. */
+const pickSet = (): FrameSet => {
+  if (window.matchMedia(PHONE_QUERY).matches) return 'm';
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  return window.innerWidth * dpr > 1600 ? 'h' : 'd';
+};
 
 type Beat = { eyebrow: string; title: string; body: string };
 
@@ -64,16 +78,20 @@ export const ScrollStory: React.FC<ScrollStoryProps> = ({ onGetStarted }) => {
   const frames = useRef<(HTMLImageElement | null)[]>([]);
   const current = useRef(0);
   const [loaded, setLoaded] = useState(0);
-  const [isPhone, setIsPhone] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+  const [set, setSet] = useState<FrameSet>(
+    () => (typeof window === 'undefined' ? 'd' : pickSet()),
   );
   const reduced = prefersReducedMotion();
 
+  // Follow the screen, but never step down from 1440p to 1080p: the sharper
+  // frames still look right in a smaller window, and reloading would cost more.
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const onChange = () => setIsPhone(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
+    const update = () => {
+      const next = pickSet();
+      setSet((prev) => (prev === 'h' && next === 'd' ? prev : next));
+    };
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
   }, []);
 
   /** Draw frame `index` (or the nearest one that has loaded), cover-fit. */
@@ -124,7 +142,6 @@ export const ScrollStory: React.FC<ScrollStoryProps> = ({ onGetStarted }) => {
   // Load frames: the first immediately, then a coarse pass (every 8th) so any
   // scroll position has something close, then fill in the rest.
   useEffect(() => {
-    const set = isPhone ? 'm' : 'd';
     frames.current = new Array(FRAME_COUNT).fill(null);
     setLoaded(0);
     let alive = true;
@@ -152,7 +169,7 @@ export const ScrollStory: React.FC<ScrollStoryProps> = ({ onGetStarted }) => {
     // A few parallel lanes keeps the connection busy without flooding it.
     for (let lane = 0; lane < 6; lane++) loadOne();
     return () => { alive = false; };
-  }, [isPhone]);
+  }, [set]);
 
   useGSAP(() => {
     if (reduced) {

@@ -142,3 +142,45 @@ def delete_event(result: Dict, event_id: str) -> Dict:
     summary["numEvents"] = len(result.get("events", []))
     result["summary"] = summary
     return result
+
+
+def delete_photos(result: Dict, photo_ids: List[str]) -> Dict:
+    """Remove photos from the session everywhere they appear. A moment left
+    empty is dropped; a moment that loses its best shot falls back to its
+    highest-scoring remaining photo."""
+    gone = set(photo_ids)
+    known = {pid for evt in result.get("events", []) for pid in evt.get("photoIds", [])}
+    unknown = gone - known
+    if not gone or unknown:
+        raise ValueError(f"Unknown photo id: {sorted(unknown)[0]}" if unknown else "No photos given.")
+
+    events: List[Dict] = []
+    for evt in result.get("events", []):
+        evt["photoIds"] = [p for p in evt.get("photoIds", []) if p not in gone]
+        if not evt["photoIds"]:
+            continue
+        evt["members"] = [m for m in evt.get("members", []) if m["photoId"] not in gone]
+        evt["bestByPerson"] = [b for b in evt.get("bestByPerson") or [] if b["photoId"] not in gone]
+        if evt.get("mmrPicks"):
+            evt["mmrPicks"] = {mode: [p for p in picks if p not in gone] for mode, picks in evt["mmrPicks"].items()}
+        if evt.get("topPhotoId") in gone:
+            ranked = sorted(evt["members"], key=lambda m: m.get("finalScore", 0), reverse=True)
+            evt["topPhotoId"] = ranked[0]["photoId"] if ranked else evt["photoIds"][0]
+            evt.pop("userPinned", None)
+        if evt.get("previousTopPhotoId") in gone:
+            evt.pop("previousTopPhotoId", None)
+        events.append(evt)
+    result["events"] = events
+
+    for ident in result.get("identities", []):
+        ident["photoIds"] = [p for p in ident.get("photoIds", []) if p not in gone]
+        ident["faceBoxes"] = {p: box for p, box in (ident.get("faceBoxes") or {}).items() if p not in gone}
+    result["identities"] = [i for i in result.get("identities", []) if i.get("photoIds")]
+
+    _recompute_event_persons(result)
+    summary = result.get("summary") or {}
+    summary["numPhotos"] = max(0, int(summary.get("numPhotos") or 0) - len(gone))
+    summary["numEvents"] = len(result["events"])
+    summary["numIdentities"] = len(result["identities"])
+    result["summary"] = summary
+    return result

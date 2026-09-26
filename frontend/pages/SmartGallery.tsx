@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Clapperboard, Download, FileText, FolderHeart, Images, LayoutGrid, Loader2, Pencil, ScanFace, SlidersHorizontal,
-  Sparkles, Trash2, UploadCloud, Users,
+  ArrowLeft, Clapperboard, Download, FileText, Images, LayoutGrid, Loader2, Pencil, ScanFace, SlidersHorizontal,
+  Sparkles, Trash2, TreePalm, UploadCloud, Users,
 } from 'lucide-react';
 import type { Event, EventMember, Identity, Photo } from '../types';
 import type { LightboxItem } from '../components/Lightbox';
@@ -21,26 +21,27 @@ import {
 import { CountUp, Segmented, SplitTitle, type SegmentItem } from '../components/gallery/motion';
 import { MomentsView } from '../components/gallery/MomentsView';
 import { AllPhotosView, CleanupView, PhotoGrid, keeperIds } from '../components/gallery/PhotoGrid';
-import { LibraryView, type SyncState } from '../components/gallery/LibraryView';
 import { SearchBar, type SearchHits } from '../components/gallery/SearchBar';
 import { PeopleManager, PersonalizationPanel } from '../components/gallery/panels';
 import { AlbumModal, type AlbumChoices } from '../components/gallery/AlbumModal';
 
 // Remotion (preview + in-browser encoder) is only downloaded when a video is made.
 const VideoModal = lazy(() => import('../components/gallery/VideoModal').then((m) => ({ default: m.VideoModal })));
+// Likewise three.js, only when someone walks onto Lumi's island.
+const WorldModal = lazy(() => import('../world/WorldModal'));
 
-type View = 'moments' | 'all' | 'library' | 'cleanup';
+type View = 'moments' | 'all' | 'cleanup';
 
 const VIEW_KEY = 'lumina-gallery-view';
 const ALBUM_MMR_MODE = 'balanced' as const;
 
-/** Sessions already saved to the library this page-load (per user). */
+/** Sessions already saved to the library (it feeds Lumi's island) this page-load (per user). */
 const syncedSessions = new Set<string>();
 
 function readView(): View {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    return v === 'all' || v === 'library' || v === 'cleanup' ? v : 'moments';
+    return v === 'all' || v === 'cleanup' ? v : 'moments';
   } catch {
     return 'moments';
   }
@@ -102,7 +103,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   enhanceStyleRef.current = profile?.enhance_style ?? 'natural';
 
   const hasSession = initialEvents.length > 0;
-  const [view, setViewState] = useState<View>(() => (hasSession ? readView() : 'library'));
+  const [view, setViewState] = useState<View>(readView);
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [faceRingOn, setFaceRingOn] = useState(true);
@@ -113,13 +114,12 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   const [collageOpen, setCollageOpen] = useState(false);
   const [collageBusy, setCollageBusy] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
+  const [worldOpen, setWorldOpen] = useState(false);
   const [enhanceEntries, setEnhanceEntries] = useState<Record<string, EnhanceEntry>>({});
   const [enhancePending, setEnhancePending] = useState<Record<string, boolean>>({});
   const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
   const [lightbox, setLightbox] = useState<{ items: LightboxItem[]; index: number } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [sync, setSync] = useState<SyncState>({ status: 'idle' });
-  const [libraryVersion, setLibraryVersion] = useState(0);
 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -167,17 +167,8 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     const key = `${user.id}:${jobId}`;
     if (syncedSessions.has(key)) return;
     syncedSessions.add(key);
-    const items = librarySyncItems(initialEvents, initialIdentities);
-    setSync({ status: 'syncing', progress: { total: items.length, done: 0, added: 0, failed: 0 } });
-    syncToLibrary(user.id, jobId, items, (progress) => setSync({ status: 'syncing', progress }))
-      .then((progress) => {
-        setSync({ status: 'done', progress });
-        if (progress.added > 0) setLibraryVersion((v) => v + 1);
-      })
-      .catch((err) => {
-        syncedSessions.delete(key);
-        setSync({ status: 'error', message: err instanceof Error ? err.message : 'Could not save to your library.' });
-      });
+    syncToLibrary(user.id, jobId, librarySyncItems(initialEvents, initialIdentities))
+      .catch(() => { syncedSessions.delete(key); });
   }, [user?.id, jobId, initialEvents, initialIdentities]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- derived data ---- */
@@ -255,7 +246,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     if (!jobId) return;
     try {
       onResultUpdate?.(await applyCorrection(jobId, { action: 'delete_event', eventId: id }));
-      notify('Moment removed. Your library copies stay put.', 'info');
+      notify('Moment removed.', 'info');
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Delete failed on server.', 'error');
     }
@@ -442,19 +433,27 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   /* ---- render ---- */
 
   const tabs: SegmentItem<View>[] = [
-    ...(hasSession ? [
-      { key: 'moments' as const, label: 'Moments', icon: <Sparkles className="w-4 h-4 hidden sm:block" /> },
-      { key: 'all' as const, label: 'All photos', icon: <LayoutGrid className="w-4 h-4 hidden sm:block" /> },
-    ] : []),
-    { key: 'library', label: 'Library', icon: <FolderHeart className="w-4 h-4 hidden sm:block" /> },
-    ...(hasSession ? [{ key: 'cleanup' as const, label: 'Cleanup', icon: <Trash2 className="w-4 h-4 hidden sm:block" />, badge: rejects.length }] : []),
+    { key: 'moments', label: 'Moments', icon: <Sparkles className="w-4 h-4 hidden sm:block" /> },
+    { key: 'all', label: 'All photos', icon: <LayoutGrid className="w-4 h-4 hidden sm:block" /> },
+    { key: 'cleanup', label: 'Cleanup', icon: <Trash2 className="w-4 h-4 hidden sm:block" />, badge: rejects.length },
   ];
 
   const showFilters = hasSession && !search && (view === 'moments' || view === 'all');
   const clearFilters = () => { setSelectedPerson(null); setSelectedEvent(null); };
 
   const renderContent = () => {
-    if (search && jobId && view !== 'library') {
+    if (!hasSession) {
+      return (
+        <div className="flex flex-col items-center text-center py-16">
+          <Lumi pose="search" size={130} />
+          <h3 className="font-display text-2xl font-semibold text-slate-900 mt-4">No session open</h3>
+          <p className="text-sm text-slate-500 mt-1 max-w-sm">
+            Analyse a new batch of photos, or reopen one from My sessions, and Lumi will lay it out here.
+          </p>
+        </div>
+      );
+    }
+    if (search && jobId) {
       return (
         <div>
           <div className="flex items-center justify-between gap-3 mb-5">
@@ -488,16 +487,6 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
       );
     }
     switch (view) {
-      case 'library':
-        return (
-          <LibraryView
-            sync={sync}
-            reloadKey={libraryVersion}
-            onNotify={notify}
-            onOpenItems={openLightbox}
-            onGoToPhotos={onGoToPhotos}
-          />
-        );
       case 'cleanup':
         return <CleanupView rejects={rejects} onOpenItems={openLightbox} />;
       case 'all':
@@ -536,10 +525,10 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             <Lumi pose="star" size={84} animate className="hidden sm:block shrink-0 -mb-1" />
             <div className="min-w-0">
               <p className="text-sm font-bold text-lumina-500 mb-1.5" data-anim="fade-up">
-                {hasSession ? 'Curated by Lumi' : 'Everything you’ve kept'}
+                {hasSession ? 'Curated by Lumi' : 'Nothing here yet'}
               </p>
               <SplitTitle
-                text={hasSession ? 'Your gallery' : 'Your library'}
+                text="Your gallery"
                 className="font-display text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight text-slate-900 leading-[1.02]"
               />
               {hasSession && (
@@ -584,11 +573,21 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
               <button onClick={() => setVideoOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Make a 1080p video of these picks, with music and Lumi">
                 <Clapperboard className="w-4 h-4" /> Create video
               </button>
+              <button onClick={() => setWorldOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Walk Lumi around a 3D island of your photos">
+                <TreePalm className="w-4 h-4" /> Explore world
+              </button>
             </div>
           ) : !hasSession && onGoToPhotos ? (
-            <button onClick={onGoToPhotos} className="btn-jelly btn-jelly-sm !h-10 self-start lg:self-auto" data-anim="fade-up" data-delay="300">
-              <UploadCloud className="w-4 h-4" /> Analyse new photos
-            </button>
+            <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto" data-anim="fade-up" data-delay="300">
+              {user && (
+                <button onClick={() => setWorldOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Walk Lumi around a 3D island of your library">
+                  <TreePalm className="w-4 h-4" /> Explore world
+                </button>
+              )}
+              <button onClick={onGoToPhotos} className="btn-jelly btn-jelly-sm !h-10">
+                <UploadCloud className="w-4 h-4" /> Analyse new photos
+              </button>
+            </div>
           ) : null}
         </header>
 
@@ -597,8 +596,8 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
           ref={toolbarRef}
           className="relative z-30 py-2 mb-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
         >
-          <Segmented items={tabs} value={view} onChange={setView} className="self-start max-w-full" />
-          {hasSession && jobId && view !== 'library' && (
+          {hasSession && <Segmented items={tabs} value={view} onChange={setView} className="self-start max-w-full" />}
+          {hasSession && jobId && (
             <SearchBar
               jobId={jobId}
               photosById={photosById}
@@ -738,6 +737,11 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
               onNotify={notify}
               onClose={() => setVideoOpen(false)}
             />
+          </Suspense>
+        )}
+        {worldOpen && (
+          <Suspense fallback={null}>
+            <WorldModal events={events} onClose={() => setWorldOpen(false)} />
           </Suspense>
         )}
         <ToastStack toasts={toasts} />

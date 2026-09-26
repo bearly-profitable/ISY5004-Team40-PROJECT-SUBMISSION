@@ -133,5 +133,45 @@
     "label": "loop quality_scoring",
     "usd": 0.12,
     "at": "2026-09-26 09:46:25"
+  },
+  {
+    "label": "world music",
+    "usd": 0.04,
+    "at": "2026-09-26 14:47:51"
+  },
+  {
+    "label": "world chimes",
+    "usd": 0.04,
+    "at": "2026-09-26 14:48:24"
+  },
+  {
+    "label": "voice hup",
+    "usd": 0.0001074,
+    "at": "2026-09-26 14:48:38"
+  },
+  {
+    "label": "voice wheee",
+    "usd": 0.000108,
+    "at": "2026-09-26 14:48:39"
+  },
+  {
+    "label": "voice ooh",
+    "usd": 0.0001194,
+    "at": "2026-09-26 14:48:41"
+  },
+  {
+    "label": "voice yay",
+    "usd": 0.000117,
+    "at": "2026-09-26 14:48:43"
+  },
+  {
+    "label": "voice ooh (retry)",
+    "usd": 0.0001668,
+    "at": "2026-09-26 14:49:11"
+  },
+  {
+    "label": "world foley steps",
+    "usd": 0.2,
+    "at": "2026-09-26 14:50:03"
   }
 ]

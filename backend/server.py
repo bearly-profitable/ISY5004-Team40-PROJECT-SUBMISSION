@@ -1045,6 +1045,46 @@ def apply_correction(
     return {"ok": True, "result": result}
 
 
+class DeletePhotosRequest(BaseModel):
+    photoIds: List[str] = Field(min_length=1, max_length=MAX_PHOTOS)
+
+
+@app.post("/api/sessions/{job_id}/delete-photos")
+def delete_photos(
+    job_id: str,
+    body: DeletePhotosRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    """Delete photos from a session for good: out of every moment and person,
+    and their original, thumbnails and AI edit off disk."""
+    _require_job(job_id, authorization, x_client_id)
+    result = _get_result_or_404(job_id)
+    photo_ids = list(dict.fromkeys(body.photoIds))
+    try:
+        result = corrections_mod.delete_photos(result, photo_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    store.save_result(job_id, result)
+    removed = store.remove_photos(job_id, photo_ids)
+    store.add_correction(job_id, "delete_photos", {"photoIds": photo_ids})
+
+    job_dir = (JOBS_DIR / job_id).resolve()
+    for photo_id, raw in removed.items():
+        try:
+            file_name = json.loads(raw).get("file", "")
+        except (TypeError, json.JSONDecodeError, AttributeError):
+            file_name = str(raw)
+        original = (job_dir / "input" / file_name).resolve()
+        if file_name and original.is_relative_to(job_dir):
+            original.unlink(missing_ok=True)
+            for width in _THUMB_WIDTHS:
+                (job_dir / "thumbs" / f"{width}_{original.stem}.jpg").unlink(missing_ok=True)
+        _enhanced_path(job_id, photo_id).unlink(missing_ok=True)
+    return {"ok": True, "result": result}
+
+
 # ---------------------------------------------------------------------------
 # Album export
 # ---------------------------------------------------------------------------
@@ -1632,7 +1672,8 @@ if STATIC_DIR is not None:
 
     # Slim images and Windows registries don't always know these.
     for _ext, _type in ((".webp", "image/webp"), (".woff2", "font/woff2"), (".mjs", "text/javascript"),
-                        (".wasm", "application/wasm"), (".webmanifest", "application/manifest+json")):
+                        (".wasm", "application/wasm"), (".webmanifest", "application/manifest+json"),
+                        (".glb", "model/gltf-binary")):
         mimetypes.add_type(_type, _ext)
 
     @app.get("/{path:path}", include_in_schema=False)

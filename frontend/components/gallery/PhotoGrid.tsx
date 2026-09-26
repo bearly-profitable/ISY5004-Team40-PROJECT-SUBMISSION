@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Crown, Download, Eye, EyeOff } from 'lucide-react';
+import { Crown, Download } from 'lucide-react';
 import type { Event, EventMember, FaceBox, Identity, Photo, RejectFlag } from '../../types';
 import type { LightboxItem } from '../Lightbox';
 import { REJECT_FLAG_UI } from '../../lib/signals';
@@ -157,7 +157,7 @@ export const PhotoGrid: React.FC<{
 };
 
 /* ------------------------------------------------
-   All photos — this session's full gallery, best images only
+   All photos — every shot, or each moment's best
    ------------------------------------------------ */
 export const AllPhotosView: React.FC<{
   events: Event[];
@@ -166,33 +166,33 @@ export const AllPhotosView: React.FC<{
   onOpenItems: (items: LightboxItem[], index: number) => void;
   onMakeBest: (eventId: string, photoId: string) => void;
 }> = ({ events, person, highlightPerson, onOpenItems, onMakeBest }) => {
-  const [showHidden, setShowHidden] = useState(false);
+  const [mode, setMode] = useState<'all' | 'best'>('best');
 
-  const { hiddenCount, flat } = useMemo(() => {
+  const flat = useMemo(() => {
     const personPhotos = person ? new Set(person.photoIds) : null;
-    let hidden = 0;
-    const out: Array<{ event: Event; entries: GridEntry[] }> = [];
+    const out: GridEntry[] = [];
     for (const evt of events) {
       const keep = keeperIds(evt);
       const members = new Map<string, EventMember>(evt.members.map((m) => [m.photoId, m]));
-      const entries: GridEntry[] = [];
+      // The moment's best shot, or with a person picked, their best shot in it.
+      const best = person
+        ? evt.bestByPerson?.find((b) => b.personId === person.id)?.photoId
+          ?? (personPhotos?.has(evt.topPhotoId) ? evt.topPhotoId : undefined)
+        : evt.topPhotoId;
       for (const photo of evt.photos) {
         if (personPhotos && !personPhotos.has(photo.id)) continue;
-        const kept = keep.has(photo.id);
-        if (!kept) hidden += 1;
-        if (!kept && !showHidden) continue;
-        entries.push({
+        if (mode === 'best' && photo.id !== best) continue;
+        out.push({
           photo,
           event: evt,
           isBest: photo.id === evt.topPhotoId,
-          flags: kept ? undefined : members.get(photo.id)?.flags,
+          flags: keep.has(photo.id) ? undefined : members.get(photo.id)?.flags,
           caption: evt.label,
         });
       }
-      if (entries.length) out.push({ event: evt, entries });
     }
-    return { hiddenCount: hidden, flat: out.flatMap((g) => g.entries) };
-  }, [events, person, showHidden]);
+    return out;
+  }, [events, person, mode]);
 
   const total = flat.length;
   const open = (index: number) => onOpenItems(flat.map((e) => ({ photo: e.photo, event: e.event })), index);
@@ -203,17 +203,22 @@ export const AllPhotosView: React.FC<{
         <p className="text-sm text-slate-500">
           <span className="font-bold text-slate-800">{total} {total === 1 ? 'photo' : 'photos'}</span>
           {person && <> with <span className="font-bold text-slate-800">{person.label}</span></>}
-          {hiddenCount > 0 && !showHidden && <> · {hiddenCount} duplicates &amp; rejects tucked away</>}
+          {mode === 'best' && <> · the best shot of each moment</>}
         </p>
-        {hiddenCount > 0 && (
-          <button
-            onClick={() => setShowHidden((v) => !v)}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-sm font-bold text-slate-600 hover:text-slate-900 bg-slate-900/[0.05] hover:bg-slate-900/[0.08] transition-colors"
-          >
-            {showHidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            {showHidden ? 'Best only' : `Show all ${total + hiddenCount}`}
-          </button>
-        )}
+        <div className="inline-flex rounded-full bg-slate-900/[0.05] p-1" role="group" aria-label="Which photos to show">
+          {([['best', 'Best shots'], ['all', 'Show all']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMode(key)}
+              aria-pressed={mode === key}
+              className={`h-7 px-3.5 rounded-full text-sm font-bold transition-colors ${
+                mode === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <PhotoGrid

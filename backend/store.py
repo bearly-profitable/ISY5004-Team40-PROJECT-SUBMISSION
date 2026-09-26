@@ -183,6 +183,25 @@ class LuminaStore:
             return json.loads(row["photo_map_json"])
         return {}
 
+    def remove_photos(self, job_id: str, photo_ids: List[str]) -> Dict[str, str]:
+        """Drop photos from a job's photo map (and its count). Returns the
+        removed entries so the caller can clean up their files."""
+        gone = set(photo_ids)
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT photo_map_json, num_photos FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if not row:
+                return {}
+            photo_map = json.loads(row["photo_map_json"] or "{}")
+            removed = {pid: raw for pid, raw in photo_map.items() if pid in gone}
+            kept = {pid: raw for pid, raw in photo_map.items() if pid not in gone}
+            conn.execute(
+                "UPDATE jobs SET photo_map_json = ?, num_photos = ? WHERE job_id = ?",
+                (json.dumps(kept), max(0, (row["num_photos"] or 0) - len(removed)), job_id),
+            )
+        return removed
+
     def job_owner(self, job_id: str) -> tuple[bool, Optional[str]]:
         """(exists, owner) for one job."""
         with self._conn() as conn:

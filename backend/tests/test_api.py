@@ -186,6 +186,24 @@ def test_corrections_endpoint(client):
     assert bad.status_code == 400
 
 
+def test_delete_photos_endpoint(client):
+    test_client, server = client
+    job_id = _start_and_finish_job(client)
+    assert test_client.get(f"/api/photos/{job_id}/photo-b?w=200").status_code == 200
+
+    resp = test_client.post(f"/api/sessions/{job_id}/delete-photos", json={"photoIds": ["photo-b"]})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["events"][0]["photoIds"] == ["photo-a"]
+
+    # Gone from the stored session, photo serving, and disk
+    session = test_client.get(f"/api/sessions/{job_id}").json()
+    assert {p["id"] for p in session["photos"]} == {"photo-a"}
+    assert test_client.get(f"/api/photos/{job_id}/photo-b").status_code == 404
+    assert not list((server.JOBS_DIR / job_id / "thumbs").glob("*_b*"))
+
+    assert test_client.post(f"/api/sessions/{job_id}/delete-photos", json={"photoIds": ["photo-b"]}).status_code == 400
+
+
 def test_export_returns_zip(client):
     test_client, _ = client
     job_id = _start_and_finish_job(client)

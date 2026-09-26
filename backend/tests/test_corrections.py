@@ -4,6 +4,7 @@ import pytest
 
 from corrections import (
     delete_event,
+    delete_photos,
     merge_persons,
     move_photo,
     rename_event,
@@ -118,3 +119,31 @@ def test_operations_do_not_corrupt_unrelated_fields(result):
     snapshot = copy.deepcopy(result["events"][1]["members"])
     out = merge_persons(result, "person_1", "person_0")
     assert out["events"][1]["members"] == snapshot
+
+
+def test_delete_photos_removes_them_everywhere(result):
+    out = delete_photos(result, ["p2", "p4"])
+    assert out["events"][0]["photoIds"] == ["p1"]
+    assert [m["photoId"] for m in out["events"][0]["members"]] == ["p1"]
+    assert out["events"][0]["bestByPerson"] == [{"personId": "person_0", "photoId": "p1"}]
+    # person_1 only appeared in p2, so they are gone
+    assert [i["id"] for i in out["identities"]] == ["person_0"]
+    assert _identity(out, "person_0")["photoIds"] == ["p1", "p3"]
+    assert out["events"][0]["persons"] == ["person_0"]
+    assert out["summary"] == {"numPhotos": 2, "numEvents": 2, "numIdentities": 1}
+
+
+def test_delete_photos_repicks_best_and_drops_empty_moments(result):
+    result["events"][0]["userPinned"] = True
+    out = delete_photos(result, ["p1", "p3", "p4"])
+    assert [e["id"] for e in out["events"]] == ["event_0"]
+    assert out["events"][0]["topPhotoId"] == "p2"
+    assert "userPinned" not in out["events"][0]
+    assert out["summary"]["numEvents"] == 1
+
+
+def test_delete_photos_rejects_unknown_ids(result):
+    with pytest.raises(ValueError):
+        delete_photos(result, ["p1", "nope"])
+    with pytest.raises(ValueError):
+        delete_photos(result, [])
