@@ -64,6 +64,18 @@ export function focalPoints(identities: Array<{ faceBoxes?: Record<string, FaceB
   return out;
 }
 
+/** photoId -> the smallest box holding every face in it (0..1 of the image). */
+export function faceBounds(identities: Array<{ faceBoxes?: Record<string, FaceBox> }>): Map<string, FaceBox> {
+  const out = new Map<string, FaceBox>();
+  for (const person of identities) {
+    for (const [photoId, [x1, y1, x2, y2]] of Object.entries(person.faceBoxes ?? {})) {
+      const b = out.get(photoId);
+      out.set(photoId, b ? [Math.min(b[0], x1), Math.min(b[1], y1), Math.max(b[2], x2), Math.max(b[3], y2)] : [x1, y1, x2, y2]);
+    }
+  }
+  return out;
+}
+
 export const focalStyle = (focal?: Focal): React.CSSProperties | undefined =>
   focal ? { objectPosition: `${(focal[0] * 100).toFixed(1)}% ${(focal[1] * 100).toFixed(1)}%` } : undefined;
 

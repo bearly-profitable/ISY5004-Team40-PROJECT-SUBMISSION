@@ -49,7 +49,7 @@ const Backdrop: React.FC<{ colors: [string, string, string]; seed?: number }> = 
           <Img
             key={i}
             src={softDot(i % 2 ? 'rgba(255,255,255,0.6)' : `${colors[2]}2e`)}
-            style={{ position: 'absolute', left: o.x * width - r / 2, top: o.y * height - r / 2, width: r, height: r, transform: `translate(${dx}px, ${dy}px)` }}
+            style={{ position: 'absolute', left: o.x * width - r / 2, top: o.y * height - r / 2, width: r, height: r, maxWidth: 'none', transform: `translate(${dx}px, ${dy}px)` }}
           />
         );
       })}
@@ -76,12 +76,26 @@ export const PhotoFrame: React.FC<{
   const base = Math.max(width / photo.width, height / photo.height);
   const dw = photo.width * base;
   const dh = photo.height * base;
-  const [fx, fy] = photo.focal ?? [0.5, 0.42];
+  let [fx, fy] = photo.focal ?? [0.5, 0.42];
+  // Centre on the box around everyone's faces when the crop can hold it all;
+  // centring on their average alone can cut people at both edges in half.
+  let maxZoom = 1.14;
+  if (photo.faces) {
+    const [x1, y1, x2, y2] = photo.faces;
+    const spanW = (x2 - x1 + 0.06) * dw;
+    const spanH = (y2 - y1 + 0.06) * dh;
+    if (spanW <= width) fx = (x1 + x2) / 2;
+    if (spanH <= height) fy = (y1 + y2) / 2;
+    // The Ken Burns zoom stops before anyone's face leaves the frame.
+    maxZoom = Math.max(1, Math.min(maxZoom, width / spanW, height / spanH));
+  }
   const left = Math.min(0, Math.max(width - dw, width / 2 - fx * dw));
   const top = Math.min(0, Math.max(height - dh, height / 2 - fy * dh));
   const random = rng(seed * 97 + 5);
   const zoomIn = random() < 0.65;
-  const [z0, z1] = zoom ?? (zoomIn ? [1.02, 1.14] : [1.14, 1.02]);
+  const [za, zb] = zoom ?? (zoomIn ? [1.02, 1.14] : [1.14, 1.02]);
+  const z0 = Math.min(za, maxZoom);
+  const z1 = Math.min(zb, maxZoom);
   const ease = Easing.inOut(Easing.sin)(Math.max(0, Math.min(1, t)));
   const z = z0 + (z1 - z0) * ease;
   // Pan the pivot from beside the faces towards them.
@@ -92,6 +106,10 @@ export const PhotoFrame: React.FC<{
       <Img
         src={photo.src}
         style={{
+          // The app's CSS reset caps every <img> at its container's width
+          // (Tailwind preflight: max-width 100%). A crop is wider than its box
+          // by design, so the cap squeezed the photo and left a dark strip.
+          maxWidth: 'none', maxHeight: 'none',
           position: 'absolute', left, top, width: dw, height: dh,
           transformOrigin: `${Math.max(0, Math.min(dw, ox))}px ${Math.max(0, Math.min(dh, oy))}px`,
           transform: `scale(${z})`,
@@ -100,6 +118,55 @@ export const PhotoFrame: React.FC<{
     </div>
   );
 };
+
+type Tile = { x: number; y: number; w: number; h: number };
+
+/**
+ * Stack photos in rows that fill a W x H box with little cropping: try every
+ * way of splitting them (in order) into rows of one to three, keep the split
+ * whose natural height is closest to H, then stretch or squeeze the rows by at
+ * most ~20% to fill it (that is all the cropping there is). Anything left over
+ * is split evenly above and below.
+ */
+function justifiedRows(aspects: number[], W: number, H: number, gap: number): Tile[] {
+  const n = aspects.length;
+  let best: { rows: number[][]; cost: number } | null = null;
+  for (let mask = 0; mask < 1 << (n - 1); mask++) {
+    const rows: number[][] = [[0]];
+    for (let i = 1; i < n; i++) {
+      if (mask & (1 << (i - 1))) rows.push([i]);
+      else rows[rows.length - 1].push(i);
+    }
+    if (rows.some((r) => r.length > 3)) continue;
+    const natural = rows.reduce((sum, r) => sum + (W - gap * (r.length - 1)) / r.reduce((a, i) => a + aspects[i], 0), 0)
+      + gap * (rows.length - 1);
+    const cost = Math.abs(Math.log(natural / H)) + 0.12 * rows.filter((r) => r.length === 3).length;
+    if (!best || cost < best.cost) best = { rows, cost };
+  }
+  const rows = best!.rows;
+  const heights = rows.map((r) => (W - gap * (r.length - 1)) / r.reduce((a, i) => a + aspects[i], 0));
+  const room = H - gap * (rows.length - 1);
+  const stretch = Math.min(1.2, Math.max(0.82, room / heights.reduce((a, h) => a + h, 0)));
+  const rowH = heights.map((h) => h * stretch);
+  const total = rowH.reduce((a, h) => a + h, 0) + gap * (rows.length - 1);
+  // Still too tall at the limit: shrink everything and centre it.
+  const k = total > H ? H / total : 1;
+  const offsetX = (W - W * k) / 2;
+  let y = (H - total * k) / 2;
+  const tiles: Tile[] = new Array(n);
+  rows.forEach((r, ri) => {
+    const sum = r.reduce((a, i) => a + aspects[i], 0);
+    const free = W - gap * (r.length - 1);
+    let x = offsetX;
+    r.forEach((i) => {
+      const w = (free * aspects[i]) / sum;
+      tiles[i] = { x, y, w: w * k, h: rowH[ri] * k };
+      x += (w + gap) * k;
+    });
+    y += (rowH[ri] + gap) * k;
+  });
+  return tiles;
+}
 
 /** A photo scaled to fit a box, keeping its whole frame. */
 const fitBox = (photo: MoviePhoto, maxW: number, maxH: number) => {
@@ -137,9 +204,12 @@ const RiseText: React.FC<{ text: string; delay?: number; stagger?: number; style
 const Polaroid: React.FC<{ photo: MoviePhoto; width: number; t: number; caption?: string; seed?: number }> = ({ photo, width, t, caption, seed = 0 }) => {
   const pad = width * 0.05;
   const inner = width - pad * 2;
+  // Square prints chopped the sides off landscape photos; follow the photo
+  // instead, between a slightly tall and a 4:3-ish wide print.
+  const innerH = inner / Math.min(1.3, Math.max(0.8, photo.width / photo.height));
   return (
     <div style={{ width, padding: pad, paddingBottom: caption ? pad * 3.6 : pad * 2.4, backgroundColor: '#fffdf8', borderRadius: width * 0.012, boxShadow: `0 ${width * 0.03}px ${width * 0.05}px rgba(40,20,60,0.26)` }}>
-      <PhotoFrame photo={photo} width={inner} height={inner} t={t} seed={seed} zoom={[1.04, 1.1]} />
+      <PhotoFrame photo={photo} width={inner} height={innerH} t={t} seed={seed} zoom={[1.04, 1.1]} />
       {caption && (
         <div style={{ fontFamily: DISPLAY_FONT, fontStyle: 'italic', fontWeight: 500, fontSize: width * 0.07, color: '#475569', textAlign: 'center', marginTop: pad * 0.9 }}>
           {caption}
@@ -355,7 +425,7 @@ export const ShotScene: React.FC<{
       </>
     );
   } else if (layout === 'framed') {
-    const box = fitBox(photos[0], width * 0.86, height * 0.84);
+    const box = fitBox(photos[0], width * (vertical ? 0.92 : 0.86), height * 0.84);
     const s = spring({ frame, fps, config: { damping: 18 } });
     body = (
       <>
@@ -388,9 +458,12 @@ export const ShotScene: React.FC<{
     const pad = 36 * u;
     const W = width - pad * 2;
     const H = height - pad * 2;
-    type Tile = { x: number; y: number; w: number; h: number };
     let tiles: Tile[] = [];
-    if (layout === 'pair') {
+    if (vertical) {
+      // A tall frame cannot hold fixed tiles without chopping landscape
+      // photos to slivers, so rows are shaped by the photos themselves.
+      tiles = justifiedRows(photos.map((p) => p.width / p.height), W, H, gap);
+    } else if (layout === 'pair') {
       tiles = vertical
         ? [{ x: 0, y: 0, w: W, h: (H - gap) / 2 }, { x: 0, y: (H + gap) / 2, w: W, h: (H - gap) / 2 }]
         : [{ x: 0, y: 0, w: (W - gap) / 2, h: H }, { x: (W + gap) / 2, y: 0, w: (W - gap) / 2, h: H }];

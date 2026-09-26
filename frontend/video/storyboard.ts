@@ -19,6 +19,8 @@ export interface MoviePhoto {
   height: number;
   /** Centre of the faces, 0..1 of the image; crops keep it in frame. */
   focal?: [number, number];
+  /** Box around every face, [x1, y1, x2, y2] as 0..1 of the image. */
+  faces?: [number, number, number, number];
   /** Tiny pre-blurred copy for backdrops (live blur is too slow to export). */
   blurSrc?: string;
 }
@@ -99,6 +101,20 @@ export function hashString(text: string): number {
 
 export const orientationOf = (p: MoviePhoto): Orientation => (p.width >= p.height ? 'landscape' : 'portrait');
 
+/**
+ * Whether filling a box of `boxAspect` (w/h) with this photo still shows it
+ * well: every face stays in the crop, and without faces at least 60% of each
+ * side survives. Otherwise the photo is better shown whole, framed.
+ */
+export function coverFits(p: MoviePhoto, boxAspect: number): boolean {
+  const aspect = p.width / p.height;
+  const visibleW = boxAspect < aspect ? boxAspect / aspect : 1;
+  const visibleH = boxAspect > aspect ? aspect / boxAspect : 1;
+  if (!p.faces) return visibleW >= 0.6 && visibleH >= 0.6;
+  const [x1, y1, x2, y2] = p.faces;
+  return x2 - x1 + 0.08 <= visibleW && y2 - y1 + 0.08 <= visibleH && visibleW >= 0.4 && visibleH >= 0.4;
+}
+
 const CAMEO_LINES: Array<{ pose: LumiPose; say: string | null }> = [
   { pose: 'camera', say: 'Say cheese!' },
   { pose: 'point', say: 'Look at this!' },
@@ -133,7 +149,9 @@ function groupChapter(
   // The chapter's best photo opens it on its own.
   const hero = queue.shift();
   if (!hero) return out;
-  out.push({ layout: 'single', photos: [hero] });
+  // Full-bleed only when the crop keeps the faces; otherwise show it whole.
+  const frameAspect = vertical ? 9 / 16 : 16 / 9;
+  out.push({ layout: coverFits(hero, frameAspect) ? 'single' : 'framed', photos: [hero] });
   const pattern = PATTERNS[level];
   let k = offset;
   while (queue.length) {
@@ -151,11 +169,9 @@ function groupChapter(
       size = size + 1;
     }
     const group = queue.splice(0, size);
-    // A photo shaped against the frame looks better framed than cropped.
-    if (group.length === 1 && layout === 'single') {
-      const against = vertical ? orientationOf(group[0]) === 'landscape' : orientationOf(group[0]) === 'portrait';
-      if (against) layout = 'framed';
-    }
+    // A photo shaped against the frame, or whose faces a crop would cut,
+    // looks better framed than cropped.
+    if (group.length === 1 && layout === 'single' && !coverFits(group[0], frameAspect)) layout = 'framed';
     out.push({ layout, photos: group });
   }
   return out;

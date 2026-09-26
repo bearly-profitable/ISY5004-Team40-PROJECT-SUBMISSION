@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { Crown, Download } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Crown, Download, Loader2, Trash2 } from 'lucide-react';
 import type { Event, EventMember, FaceBox, Identity, Photo, RejectFlag } from '../../types';
 import type { LightboxItem } from '../Lightbox';
 import { REJECT_FLAG_UI } from '../../lib/signals';
@@ -24,6 +24,33 @@ export function keeperIds(evt: Event): Set<string> {
   return keep;
 }
 
+/** A delete that needs a second click within a few seconds. */
+function useArmed(): [boolean, (armed: boolean) => void] {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const timer = window.setTimeout(() => setArmed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [armed]);
+  return [armed, setArmed];
+}
+
+const DeleteButton: React.FC<{ label: string; busy?: boolean; onConfirm: () => void }> = ({ label, busy, onConfirm }) => {
+  const [armed, setArmed] = useArmed();
+  return (
+    <button
+      onClick={() => { if (armed) { setArmed(false); onConfirm(); } else setArmed(true); }}
+      disabled={busy}
+      className={`inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-sm font-bold transition-colors disabled:opacity-50 flex-shrink-0 ${
+        armed ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-slate-900/[0.05] text-slate-600 hover:bg-red-50 hover:text-red-600'
+      }`}
+    >
+      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+      {armed ? 'Click again to delete' : label}
+    </button>
+  );
+};
+
 /* ------------------------------------------------
    One square tile
    ------------------------------------------------ */
@@ -35,6 +62,9 @@ export interface TileProps {
   caption?: string;
   faceBox?: FaceBox | null;
   onMakeBest?: () => void;
+  /** Delete for good (asks for a second click). */
+  onDelete?: () => void;
+  deleting?: boolean;
   eager?: boolean;
   className?: string;
   /** Use the sharper thumbnail (large tiles). */
@@ -43,13 +73,14 @@ export interface TileProps {
 }
 
 export const PhotoTile: React.FC<TileProps> = ({
-  photo, onOpen, isBest, flags, caption, faceBox, onMakeBest, eager, className = '', large, children,
+  photo, onOpen, isBest, flags, caption, faceBox, onMakeBest, onDelete, deleting, eager, className = '', large, children,
 }) => {
   const [aspect, setAspect] = useState<number | null>(null);
+  const [armed, setArmed] = useArmed();
   const focal = useFocal(photo.id);
   return (
     <div
-      className={`g-tile group relative overflow-hidden rounded-xl bg-slate-100 cursor-zoom-in ${className}`}
+      className={`g-tile group relative overflow-hidden rounded-xl bg-slate-100 cursor-zoom-in transition-opacity ${deleting ? 'opacity-40 pointer-events-none' : ''} ${className}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -87,7 +118,9 @@ export const PhotoTile: React.FC<TileProps> = ({
         </p>
       )}
 
-      <div className="absolute top-2 right-2 z-[5] flex gap-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-300">
+      <div className={`absolute top-2 right-2 z-[5] flex gap-1.5 transition-opacity duration-300 ${
+        armed || deleting ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+      }`}>
         {onMakeBest && !isBest && (
           <button
             onClick={(e) => { e.stopPropagation(); onMakeBest(); }}
@@ -106,6 +139,22 @@ export const PhotoTile: React.FC<TileProps> = ({
         >
           <Download className="w-4 h-4" />
         </button>
+        {onDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (armed) { setArmed(false); onDelete(); } else setArmed(true);
+            }}
+            className={`h-8 rounded-full flex items-center justify-center gap-1 shadow-sm transition-all ${
+              armed ? 'px-2.5 bg-red-500 text-white text-xs font-bold' : 'w-8 bg-white/90 text-slate-700 hover:text-red-500'
+            }`}
+            title={armed ? 'Click again to delete for good' : 'Delete'}
+            aria-label={armed ? 'Confirm delete' : 'Delete'}
+          >
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {armed && 'Delete?'}
+          </button>
+        )}
       </div>
       {children}
     </div>
@@ -127,10 +176,12 @@ export const PhotoGrid: React.FC<{
   entries: GridEntry[];
   onOpen: (index: number) => void;
   onMakeBest?: (eventId: string, photoId: string) => void;
+  onDelete?: (photoId: string) => void;
+  deleting?: ReadonlySet<string>;
   highlightPerson?: Identity | null;
   eagerCount?: number;
   className?: string;
-}> = ({ entries, onOpen, onMakeBest, highlightPerson, eagerCount = 0, className = '' }) => {
+}> = ({ entries, onOpen, onMakeBest, onDelete, deleting, highlightPerson, eagerCount = 0, className = '' }) => {
   const ref = useRef<HTMLDivElement>(null);
   useReveal(ref, '.g-tile', [entries.length], { y: 18, scale: 0.97 });
   return (
@@ -150,6 +201,8 @@ export const PhotoGrid: React.FC<{
           faceBox={highlightPerson?.faceBoxes?.[entry.photo.id] ?? null}
           onOpen={() => onOpen(i)}
           onMakeBest={onMakeBest && entry.event ? () => onMakeBest(entry.event!.id, entry.photo.id) : undefined}
+          onDelete={onDelete ? () => onDelete(entry.photo.id) : undefined}
+          deleting={deleting?.has(entry.photo.id)}
         />
       ))}
     </div>
@@ -240,7 +293,20 @@ const FLAG_ORDER: RejectFlag[] = ['duplicate', 'eyes_closed', 'blurry', 'low_qua
 export const CleanupView: React.FC<{
   rejects: Array<{ photo: Photo; member: EventMember; event: Event }>;
   onOpenItems: (items: LightboxItem[], index: number) => void;
-}> = ({ rejects, onOpenItems }) => {
+  /** Deletes photos for good; absent when the session is not saved. */
+  onDelete?: (photoIds: string[]) => Promise<void>;
+}> = ({ rejects, onOpenItems, onDelete }) => {
+  const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
+  const remove = async (photoIds: string[]) => {
+    if (!onDelete) return;
+    setDeleting((prev) => new Set([...prev, ...photoIds]));
+    try {
+      await onDelete(photoIds);
+    } finally {
+      setDeleting((prev) => new Set([...prev].filter((id) => !photoIds.includes(id))));
+    }
+  };
+
   const groups = useMemo(() => FLAG_ORDER
     .map((flag) => ({
       flag,
@@ -261,25 +327,49 @@ export const CleanupView: React.FC<{
   const flat = groups.flatMap((g) => g.entries);
   return (
     <div>
-      <div className="flex items-center gap-4 mb-8 max-w-2xl">
-        <img src={lumiSrc('sort')} alt="" aria-hidden className="lumi-sprite h-16 w-auto flex-shrink-0" />
-        <p className="text-sm text-slate-500 leading-relaxed">
-          Lumi set aside <span className="font-bold text-slate-800">{rejects.length} {rejects.length === 1 ? 'photo' : 'photos'}</span> that
-          a better shot already covers. Nothing is deleted, and none of them go into your library.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-8">
+        <div className="flex items-center gap-4 max-w-2xl">
+          <img src={lumiSrc('sort')} alt="" aria-hidden className="lumi-sprite h-16 w-auto flex-shrink-0" />
+          <p className="text-sm text-slate-500 leading-relaxed">
+            Lumi set aside <span className="font-bold text-slate-800">{flat.length} {flat.length === 1 ? 'photo' : 'photos'}</span> that
+            a better shot already covers. Nothing is deleted until you say so, and deleting can&apos;t be undone.
+          </p>
+        </div>
+        {onDelete && (
+          <div className="sm:ml-auto">
+            <DeleteButton
+              label={`Delete all ${flat.length}`}
+              busy={flat.some((r) => deleting.has(r.photo.id))}
+              onConfirm={() => remove(flat.map((r) => r.photo.id))}
+            />
+          </div>
+        )}
       </div>
       <div className="space-y-10">
         {groups.map((group) => {
           const offset = flat.indexOf(group.entries[0]);
           return (
             <section key={group.flag}>
-              <header className="flex items-baseline gap-3 mb-3">
-                <h3 className="font-display text-lg sm:text-xl font-semibold text-slate-900">{REJECT_FLAG_UI[group.flag].label}</h3>
-                <span className="text-xs text-slate-400">{REJECT_FLAG_UI[group.flag].hint} · {group.entries.length}</span>
+              <header className="flex items-center gap-3 mb-3">
+                <div className="flex flex-wrap items-baseline gap-x-3 min-w-0">
+                  <h3 className="font-display text-lg sm:text-xl font-semibold text-slate-900">{REJECT_FLAG_UI[group.flag].label}</h3>
+                  <span className="text-xs text-slate-400">{REJECT_FLAG_UI[group.flag].hint} · {group.entries.length}</span>
+                </div>
+                {onDelete && groups.length > 1 && (
+                  <div className="ml-auto">
+                    <DeleteButton
+                      label="Delete these"
+                      busy={group.entries.some((r) => deleting.has(r.photo.id))}
+                      onConfirm={() => remove(group.entries.map((r) => r.photo.id))}
+                    />
+                  </div>
+                )}
               </header>
               <PhotoGrid
                 entries={group.entries.map((r) => ({ photo: r.photo, event: r.event, caption: r.event.label }))}
                 onOpen={(i) => onOpenItems(flat.map((r) => ({ photo: r.photo, event: r.event })), offset + i)}
+                onDelete={onDelete ? (photoId) => remove([photoId]) : undefined}
+                deleting={deleting}
               />
             </section>
           );

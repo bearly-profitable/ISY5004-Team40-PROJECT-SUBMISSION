@@ -323,20 +323,37 @@ export const PersonalizationPanel: React.FC<PersonalizationPanelProps> = ({ jobI
   };
 
   // Portaled + fixed so it always paints above the gallery, immune to the
-  // stacking contexts created by animated/blurred ancestors.
-  const panelStyle: React.CSSProperties = anchor
-    ? { top: Math.min(anchor.bottom + 10, window.innerHeight - 80), right: Math.max(window.innerWidth - anchor.right, 16) }
-    : { top: 96, right: 16 };
+  // stacking contexts created by animated/blurred ancestors. On phones the
+  // button can sit anywhere in a wrapped row, so the panel is a bottom sheet;
+  // on wider screens it drops from the button, kept inside the window, and
+  // opens upward when there is no room below.
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const sheet = vw < 640;
+  const width = Math.min(360, vw - 32);
+  let panelStyle: React.CSSProperties;
+  if (sheet) {
+    panelStyle = { left: 12, right: 12, bottom: 12, maxHeight: '75vh', transformOrigin: 'bottom center' };
+  } else {
+    const a = anchor ?? new DOMRect(vw - 16, 86, 0, 0);
+    const left = Math.min(Math.max(a.right - width, 16), vw - width - 16);
+    const below = vh - a.bottom - 26;
+    panelStyle = below >= 320 || below >= a.top - 26
+      ? { left, width, top: a.bottom + 10, maxHeight: below, transformOrigin: 'top right' }
+      : { left, width, bottom: vh - a.top + 10, maxHeight: a.top - 26, transformOrigin: 'bottom right' };
+  }
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[300]" onClick={onClose} aria-hidden />
+      <div className={`fixed inset-0 z-[300] ${sheet ? 'bg-slate-900/25 backdrop-blur-[2px]' : ''}`} onClick={onClose} aria-hidden />
       <div
-        className="fixed w-[min(360px,calc(100vw-2rem))] z-[310] max-h-[calc(100vh-120px)] overflow-y-auto rounded-2xl shadow-2xl shadow-black/20 ring-1 ring-white/60 p-5"
-        data-anim="scale" style={{
+        className="fixed z-[310] overflow-y-auto overscroll-contain rounded-2xl shadow-2xl shadow-black/20 ring-1 ring-white/60 p-5"
+        role="dialog"
+        aria-label="Your taste profile"
+        data-anim={sheet ? 'fade-up' : 'scale'}
+        style={{
           ...panelStyle,
           background: 'linear-gradient(165deg, rgba(255,255,255,0.98) 0%, rgba(248,246,255,0.96) 100%)',
-           transformOrigin: 'top right',
         }}
       >
         <div className="flex items-center justify-between mb-1">

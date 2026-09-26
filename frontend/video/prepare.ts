@@ -14,7 +14,12 @@ const MAX_SIDE = 2560;
 
 export interface PhotoSource { id: string; url: string }
 
-async function prepareOne(source: PhotoSource, focal: [number, number] | undefined, signal?: AbortSignal): Promise<MoviePhoto> {
+async function prepareOne(
+  source: PhotoSource,
+  focal: [number, number] | undefined,
+  faces: [number, number, number, number] | undefined,
+  signal?: AbortSignal,
+): Promise<MoviePhoto> {
   const blob = await fetchMediaBlob(source.url, signal);
   const bitmap = await createImageBitmap(blob);
   let { width, height } = bitmap;
@@ -33,7 +38,7 @@ async function prepareOne(source: PhotoSource, focal: [number, number] | undefin
   }
   const blurSrc = await blurredCopy(bitmap).catch(() => undefined);
   bitmap.close();
-  return { id: source.id, src: URL.createObjectURL(out), width, height, focal, blurSrc };
+  return { id: source.id, src: URL.createObjectURL(out), width, height, focal, faces, blurSrc };
 }
 
 /** Load photos a few at a time; failures are skipped rather than fatal. */
@@ -42,6 +47,7 @@ export async function preparePhotos(
   focal: Map<string, [number, number]>,
   onProgress: (done: number, total: number) => void,
   signal?: AbortSignal,
+  faces?: Map<string, [number, number, number, number]>,
 ): Promise<Map<string, MoviePhoto>> {
   const out = new Map<string, MoviePhoto>();
   let next = 0;
@@ -51,7 +57,7 @@ export async function preparePhotos(
       if (signal?.aborted) return;
       const source = sources[next++];
       try {
-        out.set(source.id, await prepareOne(source, focal.get(source.id), signal));
+        out.set(source.id, await prepareOne(source, focal.get(source.id), faces?.get(source.id), signal));
       } catch (err) {
         if (signal?.aborted) return;
         console.warn('[Lumina] Skipping a photo for the video:', err);

@@ -37,7 +37,16 @@ def accessor(gltf, blob, index):
     view = gltf["bufferViews"][acc["bufferView"]]
     start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
     width = WIDTHS[acc["type"]]
-    arr = np.frombuffer(blob, COMPONENTS[acc["componentType"]], acc["count"] * width, start)
+    dtype = np.dtype(COMPONENTS[acc["componentType"]])
+    stride = view.get("byteStride", 0)
+    if stride and stride != width * dtype.itemsize:
+        # Interleaved (TRELLIS packs position, UV and normal together): step
+        # through the rows and take this attribute's columns.
+        rows = np.frombuffer(blob, np.uint8, acc["count"] * stride - (stride - width * dtype.itemsize), start)
+        rows = np.lib.stride_tricks.as_strided(rows, (acc["count"], width * dtype.itemsize), (stride, 1))
+        arr = np.ascontiguousarray(rows).view(dtype).reshape(acc["count"], width)
+        return arr if width > 1 else arr[:, 0]
+    arr = np.frombuffer(blob, dtype, acc["count"] * width, start)
     return arr.reshape(acc["count"], width) if width > 1 else arr
 
 

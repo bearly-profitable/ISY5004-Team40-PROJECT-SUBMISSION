@@ -8,14 +8,14 @@ import type { LightboxItem } from '../components/Lightbox';
 import { Lightbox } from '../components/Lightbox';
 import { Lumi } from '../components/Lumi';
 import {
-  applyCorrection, deleteEnhanced, downloadCollage, enhancePhoto, enhancedPhotoUrl, exportAlbum, submitFeedback,
+  applyCorrection, deleteEnhanced, deletePhotos, downloadCollage, enhancePhoto, enhancedPhotoUrl, exportAlbum, submitFeedback,
 } from '../lib/analysisApi';
 import type { AnalyzeResult, CollageOptions, EnhanceStyle } from '../lib/analysisApi';
 import { useAuth } from '../lib/auth';
 import { syncToLibrary, type LibrarySyncItem } from '../lib/library';
 import { gsap, prefersReducedMotion } from '../lib/motion';
 import {
-  EnhanceContext, FaceAvatar, FocalContext, ToastStack, focalPoints,
+  EnhanceContext, FaceAvatar, FocalContext, ToastStack, faceBounds, focalPoints,
   type EnhanceContextValue, type EnhanceEntry, type Toast,
 } from '../components/gallery/shared';
 import { CountUp, Segmented, SplitTitle, type SegmentItem } from '../components/gallery/motion';
@@ -174,6 +174,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   /* ---- derived data ---- */
 
   const focal = useMemo(() => focalPoints(identities), [identities]);
+  const faces = useMemo(() => faceBounds(identities), [identities]);
 
   const photosById = useMemo(() => {
     const map = new Map<string, Photo>();
@@ -275,6 +276,16 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
       notify(err instanceof Error ? err.message : 'Could not record feedback.', 'error');
     }
   }, [events, jobId, notify]);
+
+  const handleDeletePhotos = useCallback(async (photoIds: string[]) => {
+    if (!jobId) { notify('Deleting requires a saved session.', 'error'); return; }
+    try {
+      onResultUpdate?.(await deletePhotos(jobId, photoIds));
+      notify(`Deleted ${photoIds.length} ${photoIds.length === 1 ? 'photo' : 'photos'}.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Delete failed.', 'error');
+    }
+  }, [jobId, onResultUpdate, notify]);
 
   const handlePersonRename = useCallback(async (personId: string, label: string) => {
     setIdentities((prev) => prev.map((i) => (i.id === personId ? { ...i, label } : i)));
@@ -488,7 +499,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     }
     switch (view) {
       case 'cleanup':
-        return <CleanupView rejects={rejects} onOpenItems={openLightbox} />;
+        return <CleanupView rejects={rejects} onOpenItems={openLightbox} onDelete={jobId ? handleDeletePhotos : undefined} />;
       case 'all':
         return (
           <AllPhotosView
@@ -573,19 +584,26 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
               <button onClick={() => setVideoOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Make a 1080p video of these picks, with music and Lumi">
                 <Clapperboard className="w-4 h-4" /> Create video
               </button>
-              <button onClick={() => setWorldOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Walk Lumi around a 3D island of your photos">
-                <TreePalm className="w-4 h-4" /> Explore world
-              </button>
             </div>
-          ) : !hasSession && onGoToPhotos ? (
+          ) : hasSession && view === 'all' ? (
+            <button
+              onClick={() => setWorldOpen(true)}
+              className="btn-jelly btn-jelly-sm !h-10 self-start lg:self-auto"
+              data-anim="fade-up"
+              data-delay="300"
+              title="Walk Lumi around a 3D island of your photos"
+            >
+              <TreePalm className="w-4 h-4" /> Explore world
+            </button>
+          ) : !hasSession ? (
             <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto" data-anim="fade-up" data-delay="300">
-              {user && (
-                <button onClick={() => setWorldOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Walk Lumi around a 3D island of your library">
-                  <TreePalm className="w-4 h-4" /> Explore world
+              {onGoToPhotos && (
+                <button onClick={onGoToPhotos} className="btn-jelly btn-jelly-sm !h-10">
+                  <UploadCloud className="w-4 h-4" /> Analyse new photos
                 </button>
               )}
-              <button onClick={onGoToPhotos} className="btn-jelly btn-jelly-sm !h-10">
-                <UploadCloud className="w-4 h-4" /> Analyse new photos
+              <button onClick={() => setWorldOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Walk Lumi around a 3D island of your saved photos">
+                <TreePalm className="w-4 h-4" /> Explore world
               </button>
             </div>
           ) : null}
@@ -731,6 +749,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
               events={filteredEvents}
               photos={curatedPhotoIds().map((id) => photosById.get(id)).filter((p): p is Photo => Boolean(p))}
               focal={focal}
+              faces={faces}
               enhancedUrls={Object.fromEntries(
                 (Object.entries(enhanceEntries) as Array<[string, EnhanceEntry]>).filter(([id]) => !showOriginal[id]).map(([id, entry]) => [id, entry.url]),
               )}

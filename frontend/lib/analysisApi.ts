@@ -347,6 +347,18 @@ export async function applyCorrection(jobId: string, correction: CorrectionActio
   return payload.result;
 }
 
+/** Deletes photos from a session for good (files included). */
+export async function deletePhotos(jobId: string, photoIds: string[]): Promise<AnalyzeResult> {
+  const response = await fetch(`${BACKEND_BASE_URL}/api/sessions/${jobId}/delete-photos`, {
+    method: 'POST',
+    headers: await apiHeaders(true),
+    body: JSON.stringify({ photoIds }),
+  });
+  await requireOk(response, 'Delete photos');
+  const payload = await response.json() as { result: AnalyzeResult };
+  return payload.result;
+}
+
 // ---------------------------------------------------------------------------
 // Album export
 // ---------------------------------------------------------------------------

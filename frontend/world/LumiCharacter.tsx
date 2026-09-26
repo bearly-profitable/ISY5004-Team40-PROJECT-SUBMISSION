@@ -13,6 +13,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { Dust, SprintGhosts } from './effects';
 import { ZONE_R, type Interactable, type WorldLayout } from './layout';
+import { restRig, rigLumi } from './proceduralRig';
 import type { WorldRuntime } from './runtime';
 
 export const LUMI_MODEL_URL = '/world/lumi.glb';
@@ -84,10 +85,14 @@ export const LumiCharacter: React.FC<{
 }> = ({ layout, runtime, shadows, onNearest, onZone, onSprint, onReady }) => {
   const loaded = useLoader(GLTFLoader, [LUMI_MODEL_URL, ...LUMI_ANIMATION_URLS], (l) => { l.setMeshoptDecoder(MeshoptDecoder); });
   const gltf = loaded[0];
+  // No Mixamo clips yet: give the single-mesh model legs and arms of its own.
+  const hasClips = gltf.animations.length > 0 || LUMI_ANIMATION_URLS.length > 0;
+  const limbs = useMemo(() => (hasClips ? undefined : rigLumi(gltf.scene)), [gltf, hasClips]);
   const model = useMemo(() => {
+    restRig(limbs);
     prepareModel(gltf.scene);
     return gltf.scene;
-  }, [gltf]);
+  }, [gltf, limbs]);
   const clips = useMemo(() => {
     // Mixamo calls every clip "mixamo.com": name them after their files.
     const named = (clip: THREE.AnimationClip, name: string) => { clip.name = name; return clip; };
@@ -243,7 +248,7 @@ export const LumiCharacter: React.FC<{
     /* ---- stride: footsteps, dust, the waddle ---- */
     const k = Math.min(1.7, rt.speed / RUN);
     if (rt.grounded) phase.current += dt * (5 + rt.speed * 1.6);
-    const half = Math.floor(phase.current / Math.PI);
+    const half = Math.floor((phase.current - Math.PI / 2) / Math.PI);
     if (half !== lastHalfStep.current) {
       lastHalfStep.current = half;
       if (rt.grounded && rt.speed > 1.2) {
@@ -282,15 +287,43 @@ export const LumiCharacter: React.FC<{
       b.position.y = rt.y + rt.flourish.hop;
       b.rotation.z *= 0.8;
       b.rotation.x = 0.18 + rt.sprint * 0.2 - stretch * 0.12;
-      b.scale.set(1 - 0.08 * stretch, 1 + 0.14 * stretch, 1 - 0.08 * stretch);
+      b.scale.set(1 - 0.06 * stretch, 1 + 0.1 * stretch, 1 - 0.06 * stretch);
+      if (limbs) {
+        // One knee up, one leg trailing, arms thrown up and out.
+        const lift = 1 - Math.exp(-16 * dt);
+        limbs.legL.rotation.x += (-0.8 - limbs.legL.rotation.x) * lift;
+        limbs.legR.rotation.x += (0.45 - limbs.legR.rotation.x) * lift;
+        limbs.armL.rotation.x += (-0.35 - limbs.armL.rotation.x) * lift;
+        limbs.armR.rotation.x += (-0.35 - limbs.armR.rotation.x) * lift;
+        limbs.armL.rotation.z += (0.95 - limbs.armL.rotation.z) * lift;
+        limbs.armR.rotation.z += (-0.95 - limbs.armR.rotation.z) * lift;
+      }
     } else {
       const t = performance.now() / 1000;
       const stride = Math.sin(phase.current);
-      b.position.y = Math.abs(stride) * 0.1 * k + rt.flourish.hop;
-      b.rotation.z = stride * 0.13 * Math.min(k, 1.1);
-      b.rotation.x = 0.12 * Math.min(k, 1) + rt.sprint * 0.26; // lean into a sprint
+      if (limbs) {
+        // Real strides: legs swing in turn, each arm with the opposite leg. The
+        // body only rises a little at each passing step, instead of hopping.
+        const reach = Math.min(k, 1.25);
+        const legAmp = (0.62 + 0.34 * rt.sprint) * reach;
+        const armAmp = (0.5 + 0.45 * rt.sprint) * reach;
+        const follow = 1 - Math.exp(-28 * dt);
+        const idleSway = k < 0.1 ? Math.sin(t * 2.2) * 0.05 : 0;
+        limbs.legL.rotation.x += (-stride * legAmp - limbs.legL.rotation.x) * follow;
+        limbs.legR.rotation.x += (stride * legAmp - limbs.legR.rotation.x) * follow;
+        limbs.armL.rotation.x += (stride * armAmp - limbs.armL.rotation.x) * follow;
+        limbs.armR.rotation.x += (-stride * armAmp - limbs.armR.rotation.x) * follow;
+        limbs.armL.rotation.z += (0.1 * reach + 0.25 * rt.sprint + idleSway - limbs.armL.rotation.z) * follow;
+        limbs.armR.rotation.z += (-0.1 * reach - 0.25 * rt.sprint - idleSway - limbs.armR.rotation.z) * follow;
+        b.position.y = Math.abs(Math.cos(phase.current)) * 0.045 * k + rt.flourish.hop;
+        b.rotation.z = stride * 0.06 * Math.min(k, 1.1);
+      } else {
+        b.position.y = Math.abs(stride) * 0.1 * k + rt.flourish.hop;
+        b.rotation.z = stride * 0.13 * Math.min(k, 1.1);
+      }
+      b.rotation.x = 0.1 * Math.min(k, 1) + rt.sprint * 0.26; // lean into a sprint
       const breathe = k < 0.1 ? Math.sin(t * 2.2) * 0.018 : 0;
-      const bounce = rt.flourish.hop > 0 ? 0 : Math.abs(Math.cos(phase.current)) * 0.04 * k;
+      const bounce = rt.flourish.hop > 0 ? 0 : Math.abs(Math.cos(phase.current)) * (limbs ? 0.02 : 0.04) * k;
       b.scale.set((1 + bounce) * squashXZ, (1 + breathe - bounce) * squashY, (1 + bounce) * squashXZ);
     }
     blob.current?.scale.setScalar(1 / (1 + rt.y * 0.5));

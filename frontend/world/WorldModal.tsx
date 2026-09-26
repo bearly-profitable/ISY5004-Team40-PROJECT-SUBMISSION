@@ -348,11 +348,19 @@ export const WorldModal: React.FC<{ events: Event[]; onClose: () => void }> = ({
     if (zone >= 0) runtime.current.audio?.zone();
   }, [zone]);
 
+  // The banner keeps the last moment's words while it fades, and always fades
+  // when Lumi leaves, so an empty white pill is never left on screen.
+  const [bannerZone, setBannerZone] = useState(-1);
   useLayoutEffect(() => {
     const el = bannerRef.current;
-    if (!el || zone < 0 || prefersReducedMotion()) return;
+    if (zone >= 0) setBannerZone(zone);
+    if (!el) return;
+    if (zone < 0 || prefersReducedMotion()) {
+      gsap.to(el, { autoAlpha: 0, y: -12, duration: 0.25, ease: 'power2.in', overwrite: true });
+      return;
+    }
     const tl = gsap.timeline();
-    tl.fromTo(el, { y: -24, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.55, ease: 'back.out(1.8)' })
+    tl.fromTo(el, { y: -24, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.55, ease: 'back.out(1.8)', overwrite: true })
       .to(el, { y: -16, autoAlpha: 0, duration: 0.45, ease: 'power2.in' }, '+=2.6');
     return () => { tl.kill(); };
   }, [zone]);
@@ -370,7 +378,7 @@ export const WorldModal: React.FC<{ events: Event[]; onClose: () => void }> = ({
     gsap.to(el, { autoAlpha: 0, duration: 0.6, delay: 0.15, ease: 'power2.out', onComplete: () => setLoaderGone(true) });
   }, [ready]);
 
-  const zoneInfo = zone >= 0 ? layout?.zones[zone] : null;
+  const zoneInfo = bannerZone >= 0 ? layout?.zones[bannerZone] : null;
   const nearZone = near ? layout?.zones[near.zone] : null;
 
   const unsupported = (
@@ -471,7 +479,10 @@ export const WorldModal: React.FC<{ events: Event[]; onClose: () => void }> = ({
 
       {/* ---------- moment banner ---------- */}
       <div className="absolute top-20 sm:top-6 inset-x-0 flex justify-center pointer-events-none px-4">
-        <div ref={bannerRef} className="invisible px-6 py-3 rounded-3xl bg-white/90 backdrop-blur shadow-lg ring-1 ring-white text-center max-w-md">
+        <div
+          ref={bannerRef}
+          className={`invisible px-6 py-3 rounded-3xl bg-white/90 backdrop-blur shadow-lg ring-1 ring-white text-center max-w-md ${zoneInfo ? '' : 'hidden'}`}
+        >
           {zoneInfo && (
             <>
               <p className="font-display text-xl sm:text-2xl font-semibold text-slate-900 leading-tight">{zoneInfo.title}</p>

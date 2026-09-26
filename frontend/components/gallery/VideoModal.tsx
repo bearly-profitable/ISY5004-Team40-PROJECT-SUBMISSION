@@ -50,11 +50,13 @@ export const VideoModal: React.FC<{
   /** The curated picks the picker starts from, in moment order. */
   photos: Photo[];
   focal: Map<string, Focal>;
+  /** photoId -> box around every face, so crops never cut someone out. */
+  faces?: Map<string, [number, number, number, number]>;
   /** photoId -> URL of its AI-enhanced version, where one is showing. */
   enhancedUrls: Record<string, string>;
   onNotify: (message: string, kind?: 'success' | 'error' | 'info') => void;
   onClose: () => void;
-}> = ({ jobId, events, photos, focal, enhancedUrls, onNotify, onClose }) => {
+}> = ({ jobId, events, photos, focal, faces, enhancedUrls, onNotify, onClose }) => {
   const [phase, setPhase] = useState<Phase>('loading');
   const [loadProgress, setLoadProgress] = useState({ done: 0, total: photos.length });
   const [loaded, setLoaded] = useState<Map<string, MoviePhoto>>(new Map());
@@ -87,7 +89,7 @@ export const VideoModal: React.FC<{
   useEffect(() => {
     const controller = new AbortController();
     const sources = photos.map((p) => ({ id: p.id, url: enhancedUrls[p.id] ?? sessionPhotoUrl(jobId, p.id, 1920) }));
-    preparePhotos(sources, focal, (done, total) => setLoadProgress({ done, total }), controller.signal)
+    preparePhotos(sources, focal, (done, total) => setLoadProgress({ done, total }), controller.signal, faces)
       .then((map) => {
         if (controller.signal.aborted) { releasePhotos(map.values()); return; }
         setLoaded(map);
