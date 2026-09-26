@@ -32,7 +32,7 @@ export const LuminaMovie: React.FC<LuminaMovieProps> = ({ storyboard, music, fad
         body = (
           <ShotScene
             layout={scene.layout} photos={scene.photos} chapterTitle={scene.chapterTitle} chapterIndex={scene.chapterIndex}
-            cameo={scene.cameo} seed={scene.seed} frames={frames} beat={beat}
+            cameo={scene.cameo} seed={scene.seed} frames={frames} beat={beat} label={scene.label}
           />
         );
         break;
@@ -41,7 +41,7 @@ export const LuminaMovie: React.FC<LuminaMovieProps> = ({ storyboard, music, fad
         break;
     }
     items.push(
-      <TransitionSeries.Sequence key={`s${i}`} durationInFrames={frames} premountFor={30}>
+      <TransitionSeries.Sequence key={`s${i}`} durationInFrames={frames}>
         {body}
       </TransitionSeries.Sequence>,
     );

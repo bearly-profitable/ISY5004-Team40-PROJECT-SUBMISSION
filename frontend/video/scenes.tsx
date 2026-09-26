@@ -1,8 +1,9 @@
 import React from 'react';
 import { AbsoluteFill, Easing, Img, interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
-import type { Cameo, MoviePhoto, ShotLayout } from './storyboard';
+import type { Cameo, ChapterLabel, MoviePhoto, ShotLayout } from './storyboard';
 import { rng } from './storyboard';
 import { LumiActor, Sparkle } from './LumiActor';
+import { softDot } from './sprites';
 import type { LumiPose } from '../components/Lumi';
 
 /* ------------------------------------------------
@@ -45,13 +46,10 @@ const Backdrop: React.FC<{ colors: [string, string, string]; seed?: number }> = 
         const dx = Math.sin(frame / (70 * o.sp) + i) * width * 0.03;
         const dy = Math.cos(frame / (80 * o.sp) + i * 2) * height * 0.04;
         return (
-          <div
+          <Img
             key={i}
-            style={{
-              position: 'absolute', left: o.x * width - r / 2, top: o.y * height - r / 2, width: r, height: r, borderRadius: '50%',
-              backgroundColor: i % 2 ? 'rgba(255,255,255,0.55)' : `${colors[2]}22`, filter: `blur(${r * 0.18}px)`,
-              transform: `translate(${dx}px, ${dy}px)`,
-            }}
+            src={softDot(i % 2 ? 'rgba(255,255,255,0.6)' : `${colors[2]}2e`)}
+            style={{ position: 'absolute', left: o.x * width - r / 2, top: o.y * height - r / 2, width: r, height: r, transform: `translate(${dx}px, ${dy}px)` }}
           />
         );
       })}
@@ -109,26 +107,28 @@ const fitBox = (photo: MoviePhoto, maxW: number, maxH: number) => {
   return { w: photo.width * k, h: photo.height * k };
 };
 
-/** Letters rise into place one after another. */
-const RiseText: React.FC<{ text: string; delay?: number; stagger?: number; style?: React.CSSProperties }> = ({ text, delay = 0, stagger = 1.2, style }) => {
+/** Words rise into place one after another. (Per word, not per letter: the
+ *  exporter's cost grows with the number of elements it draws.) */
+const RiseText: React.FC<{ text: string; delay?: number; stagger?: number; style?: React.CSSProperties }> = ({ text, delay = 0, stagger = 4, style }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const words = text.split(' ');
-  let n = 0;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', ...style }}>
-      {words.map((word, wi) => (
-        <span key={wi} style={{ display: 'flex', marginRight: wi < words.length - 1 ? '0.28em' : 0 }}>
-          {[...word].map((ch) => {
-            const s = spring({ frame: frame - delay - n++ * stagger, fps, config: { damping: 14, stiffness: 160 } });
-            return (
-              <span key={n} style={{ display: 'inline-block', transform: `translateY(${(1 - s) * 0.7}em) rotate(${(1 - s) * 8}deg)`, opacity: Math.min(1, s * 1.5) }}>
-                {ch}
-              </span>
-            );
-          })}
-        </span>
-      ))}
+      {words.map((word, i) => {
+        const s = spring({ frame: frame - delay - i * stagger, fps, config: { damping: 13, stiffness: 150 } });
+        return (
+          <span
+            key={i}
+            style={{
+              display: 'inline-block', marginRight: i < words.length - 1 ? '0.26em' : 0,
+              transform: `translateY(${(1 - s) * 0.6}em) rotate(${(1 - s) * 6}deg) scale(${0.85 + 0.15 * s})`, opacity: Math.min(1, s * 1.4),
+            }}
+          >
+            {word}
+          </span>
+        );
+      })}
     </div>
   );
 };
@@ -138,7 +138,7 @@ const Polaroid: React.FC<{ photo: MoviePhoto; width: number; t: number; caption?
   const pad = width * 0.05;
   const inner = width - pad * 2;
   return (
-    <div style={{ width, padding: pad, paddingBottom: caption ? pad * 3.6 : pad * 2.4, backgroundColor: '#fffdf8', borderRadius: width * 0.012, boxShadow: `0 ${width * 0.04}px ${width * 0.1}px rgba(40,20,60,0.28)` }}>
+    <div style={{ width, padding: pad, paddingBottom: caption ? pad * 3.6 : pad * 2.4, backgroundColor: '#fffdf8', borderRadius: width * 0.012, boxShadow: `0 ${width * 0.03}px ${width * 0.05}px rgba(40,20,60,0.26)` }}>
       <PhotoFrame photo={photo} width={inner} height={inner} t={t} seed={seed} zoom={[1.04, 1.1]} />
       {caption && (
         <div style={{ fontFamily: DISPLAY_FONT, fontStyle: 'italic', fontWeight: 500, fontSize: width * 0.07, color: '#475569', textAlign: 'center', marginTop: pad * 0.9 }}>
@@ -159,10 +159,12 @@ export const IntroScene: React.FC<{ title: string; subtitle: string; photos: Mov
   const u = useUnit();
   const vertical = height > width;
   const cards = photos.slice(0, 4);
+  // Prints tucked into the corners, clear of the title.
   const spots = vertical
-    ? [[0.02, 0.06, -9], [0.62, 0.04, 8], [0.0, 0.74, 7], [0.64, 0.76, -6]]
-    : [[0.03, 0.08, -10], [0.78, 0.06, 9], [0.02, 0.62, 6], [0.8, 0.6, -7]];
-  const titleSize = Math.min(150 * u, (width * 0.85) / Math.max(6, title.length * 0.55));
+    ? [[-0.04, 0.04, -9], [0.66, 0.03, 8], [-0.05, 0.77, 7], [0.68, 0.78, -6]]
+    : [[-0.015, 0.05, -10], [0.845, 0.04, 9], [-0.02, 0.6, 6], [0.85, 0.58, -7]];
+  const titleWidth = width * (vertical ? 0.86 : 0.6);
+  const titleSize = Math.min(130 * u, titleWidth / Math.max(6, title.length * 0.5));
   const sub = spring({ frame: frame - 26, fps, config: { damping: 200 } });
   return (
     <AbsoluteFill>
@@ -171,7 +173,7 @@ export const IntroScene: React.FC<{ title: string; subtitle: string; photos: Mov
         const [x, y, r] = spots[i];
         const s = spring({ frame: frame - 4 - i * 4, fps, config: { damping: 15 } });
         const drift = Math.sin(frame / 50 + i) * 8 * u;
-        const w = (vertical ? 330 : 360) * u;
+        const w = (vertical ? 330 : 300) * u;
         return (
           <div key={p.id} style={{ position: 'absolute', left: x * width, top: y * height, opacity: s * 0.92, transform: `translate(${(1 - s) * (x < 0.5 ? -200 : 200) * u}px, ${drift}px) rotate(${r + (1 - s) * r}deg)` }}>
             <Polaroid photo={p} width={w} t={frame / 150} seed={i} />
@@ -180,7 +182,7 @@ export const IntroScene: React.FC<{ title: string; subtitle: string; photos: Mov
       })}
       <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', flexDirection: 'column', padding: 60 * u }}>
         <LumiActor pose={[{ pose: 'wave', at: 0 }, { pose: 'camera', at: Math.round(fps * 2.4) }]} size={300 * u} delay={2} beat={beat * 2} />
-        <div style={{ position: 'relative', marginTop: 26 * u, fontFamily: DISPLAY_FONT, fontWeight: 800, fontSize: titleSize, lineHeight: 1.05, color: '#1e1b4b', textAlign: 'center', maxWidth: width * 0.8 }}>
+        <div style={{ position: 'relative', marginTop: 26 * u, fontFamily: DISPLAY_FONT, fontWeight: 800, fontSize: titleSize, lineHeight: 1.05, color: '#1e1b4b', textAlign: 'center', maxWidth: titleWidth }}>
           <RiseText text={title} delay={12} />
           <Sparkle size={56 * u} delay={30} style={{ left: -60 * u, top: -20 * u }} color="#f0abfc" />
           <Sparkle size={42 * u} delay={40} style={{ right: -50 * u, bottom: 0 }} color="#fcd34d" />
@@ -223,7 +225,7 @@ export const ChapterScene: React.FC<{
             Chapter {index + 1} of {total}
           </div>
           <div style={{ fontFamily: DISPLAY_FONT, fontWeight: 800, fontSize: titleSize, lineHeight: 1.05, color: '#1e1b4b', marginTop: 10 * u }}>
-            <RiseText text={title} delay={8} stagger={1} style={{ justifyContent: vertical ? 'center' : 'flex-start' }} />
+            <RiseText text={title} delay={8} style={{ justifyContent: vertical ? 'center' : 'flex-start' }} />
           </div>
           {dateLabel && (
             <div style={{ marginTop: 18 * u, padding: `${8 * u}px ${22 * u}px`, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.75)', fontFamily: BODY_FONT, fontWeight: 700, fontSize: 30 * u, color: '#475569', opacity: label }}>
@@ -284,6 +286,36 @@ const CameoOverlay: React.FC<{ cameo: Cameo; frames: number; beat: number }> = (
   );
 };
 
+/** A moment's name sliding in over its first shot, with a mini Lumi. */
+const LowerThird: React.FC<{ label: ChapterLabel; frames: number; beat: number }> = ({ label, frames, beat }) => {
+  const frame = useCurrentFrame();
+  const { fps, width, height } = useVideoConfig();
+  const u = useUnit();
+  const vertical = height > width;
+  const colors = palette(label.index);
+  const s = spring({ frame: frame - 6, fps, config: { damping: 16, stiffness: 120 } });
+  const out = spring({ frame: frame - (frames - 18), fps, config: { damping: 200 } });
+  const titleSize = Math.min(60 * u, (width * 0.6) / Math.max(8, label.title.length * 0.5));
+  return (
+    <div
+      style={{
+        position: 'absolute', left: 50 * u, bottom: (vertical ? 170 : 60) * u, display: 'flex', alignItems: 'flex-end',
+        transform: `translateX(${(1 - s) * -width * 0.6 - out * width * 0.6}px)`, maxWidth: width - 100 * u,
+      }}
+    >
+      <LumiActor pose={label.pose} size={170 * u} delay={10} enter="pop" beat={beat} shadow={false} style={{ marginRight: -20 * u, marginBottom: -6 * u }} />
+      <div style={{ padding: `${18 * u}px ${30 * u}px ${20 * u}px ${34 * u}px`, borderRadius: 26 * u, backgroundColor: 'rgba(255,255,255,0.94)', boxShadow: '0 10px 18px rgba(0,0,0,0.22)', borderLeft: `${8 * u}px solid ${colors[2]}` }}>
+        <div style={{ fontFamily: BODY_FONT, fontWeight: 800, fontSize: 22 * u, letterSpacing: 4 * u, textTransform: 'uppercase', color: colors[2] }}>
+          Moment {label.index + 1} of {label.total}{label.dateLabel ? ` · ${label.dateLabel}` : ''}
+        </div>
+        <div style={{ fontFamily: DISPLAY_FONT, fontWeight: 800, fontSize: titleSize, lineHeight: 1.1, color: '#1e1b4b', marginTop: 4 * u }}>
+          <RiseText text={label.title} delay={12} stagger={3} style={{ justifyContent: 'flex-start' }} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /** Soft darkening at the edges (linear gradients; radial ones do not export). */
 const Vignette: React.FC<{ strength?: number }> = ({ strength = 0.35 }) => (
   <>
@@ -293,20 +325,20 @@ const Vignette: React.FC<{ strength?: number }> = ({ strength = 0.35 }) => (
 );
 
 /** Blurred, dimmed copy of a photo filling the frame behind framed shots. */
-const BlurFill: React.FC<{ photo: MoviePhoto; t: number }> = ({ photo, t }) => {
-  const { width, height } = useVideoConfig();
-  return (
-    <AbsoluteFill style={{ backgroundColor: '#0f0a1e', overflow: 'hidden' }}>
-      <div style={{ filter: 'blur(48px) brightness(0.62) saturate(1.3)', transform: `scale(${1.25 + 0.05 * t})` }}>
-        <PhotoFrame photo={photo} width={width} height={height} t={0} zoom={[1, 1]} />
-      </div>
-    </AbsoluteFill>
-  );
-};
+const BlurFill: React.FC<{ photo: MoviePhoto; t: number }> = ({ photo, t }) => (
+  <AbsoluteFill style={{ backgroundColor: '#0f0a1e', overflow: 'hidden' }}>
+    <Img
+      src={photo.blurSrc ?? photo.src}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', transform: `scale(${1.1 + 0.05 * t})` }}
+    />
+    <AbsoluteFill style={{ backgroundColor: 'rgba(15, 10, 30, 0.38)' }} />
+  </AbsoluteFill>
+);
 
 export const ShotScene: React.FC<{
   layout: ShotLayout; photos: MoviePhoto[]; chapterTitle: string; cameo: Cameo | null; seed: number; frames: number; beat: number; chapterIndex: number;
-}> = ({ layout, photos, chapterTitle, cameo, seed, frames, beat, chapterIndex }) => {
+  label: ChapterLabel | null;
+}> = ({ layout, photos, chapterTitle, cameo, seed, frames, beat, chapterIndex, label }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const u = useUnit();
@@ -413,6 +445,7 @@ export const ShotScene: React.FC<{
     <AbsoluteFill style={{ backgroundColor: '#0f0a1e', overflow: 'hidden' }}>
       {body}
       {cameo && <CameoOverlay cameo={cameo} frames={frames} beat={beat} />}
+      {label && <LowerThird label={label} frames={frames} beat={beat} />}
     </AbsoluteFill>
   );
 };
@@ -429,9 +462,9 @@ export const OutroScene: React.FC<{ photos: MoviePhoto[]; beat: number; frames: 
   const u = useUnit();
   const vertical = height > width;
   const random = rng(4242);
-  const pieces = Array.from({ length: 46 }, () => ({
+  const pieces = Array.from({ length: 28 }, () => ({
     x: random(), speed: 0.6 + random() * 0.8, delay: random() * 40, rot: random() * 360, spin: (random() - 0.5) * 16,
-    color: CONFETTI[Math.floor(random() * CONFETTI.length)], w: 10 + random() * 14, sway: random() * 6,
+    color: CONFETTI[Math.floor(random() * CONFETTI.length)], w: 14 + random() * 16, sway: random() * 6,
   }));
   const text = spring({ frame: frame - 18, fps, config: { damping: 200 } });
   const fadeOut = interpolate(frame, [frames - 24, frames], [0, 1], clamp);

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Img, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { lumiSrc, type LumiPose } from '../components/Lumi';
+import { softDot } from './sprites';
 
 /**
  * Lumi, animated in code from the still poses: a squash-and-stretch hop in,
@@ -87,10 +88,10 @@ export const LumiActor: React.FC<LumiActorProps> = ({
   return (
     <div style={{ position: 'relative', width: size * 0.9, height: size, opacity: visible, ...style }}>
       {shadow && (
-        <div
+        <Img
+          src={softDot('rgba(60, 40, 90, 0.5)')}
           style={{
-            position: 'absolute', left: '18%', right: '18%', bottom: -size * 0.02, height: size * 0.07,
-            borderRadius: '50%', backgroundColor: 'rgba(60, 40, 90, 0.28)', filter: `blur(${size * 0.025}px)`,
+            position: 'absolute', left: '12%', width: '76%', bottom: -size * 0.04, height: size * 0.1,
             transform: `scale(${(1 - lift * 1.5) * clamp01(inP) * (1 - outP)})`,
           }}
         />

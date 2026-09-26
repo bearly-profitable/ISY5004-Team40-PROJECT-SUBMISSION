@@ -19,7 +19,7 @@ export interface AlbumChoices {
 }
 
 /** One thumbnail in the photo picker. */
-const PickTile: React.FC<{ photo: Photo; selected: boolean; onToggle: () => void }> = ({ photo, selected, onToggle }) => {
+export const PickTile: React.FC<{ photo: Photo; selected: boolean; onToggle: () => void }> = ({ photo, selected, onToggle }) => {
   const focal = useFocal(photo.id);
   return (
     <button

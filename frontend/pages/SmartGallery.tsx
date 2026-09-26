@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Download, FileText, FolderHeart, Images, LayoutGrid, Loader2, Pencil, ScanFace, SlidersHorizontal,
+  ArrowLeft, Clapperboard, Download, FileText, FolderHeart, Images, LayoutGrid, Loader2, Pencil, ScanFace, SlidersHorizontal,
   Sparkles, Trash2, UploadCloud, Users,
 } from 'lucide-react';
 import type { Event, EventMember, Identity, Photo } from '../types';
@@ -25,6 +25,9 @@ import { LibraryView, type SyncState } from '../components/gallery/LibraryView';
 import { SearchBar, type SearchHits } from '../components/gallery/SearchBar';
 import { PeopleManager, PersonalizationPanel } from '../components/gallery/panels';
 import { AlbumModal, type AlbumChoices } from '../components/gallery/AlbumModal';
+
+// Remotion (preview + in-browser encoder) is only downloaded when a video is made.
+const VideoModal = lazy(() => import('../components/gallery/VideoModal').then((m) => ({ default: m.VideoModal })));
 
 type View = 'moments' | 'all' | 'library' | 'cleanup';
 
@@ -109,6 +112,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   const [exporting, setExporting] = useState(false);
   const [collageOpen, setCollageOpen] = useState(false);
   const [collageBusy, setCollageBusy] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [enhanceEntries, setEnhanceEntries] = useState<Record<string, EnhanceEntry>>({});
   const [enhancePending, setEnhancePending] = useState<Record<string, boolean>>({});
   const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
@@ -577,6 +581,9 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
               <button onClick={() => setCollageOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Design a themed PDF album from these picks">
                 <FileText className="w-4 h-4" /> Create album
               </button>
+              <button onClick={() => setVideoOpen(true)} className="btn-jelly btn-jelly-sm !h-10" title="Make a 1080p video of these picks, with music and Lumi">
+                <Clapperboard className="w-4 h-4" /> Create video
+              </button>
             </div>
           ) : !hasSession && onGoToPhotos ? (
             <button onClick={onGoToPhotos} className="btn-jelly btn-jelly-sm !h-10 self-start lg:self-auto" data-anim="fade-up" data-delay="300">
@@ -717,6 +724,21 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             onBuild={handleBuildCollage}
             onClose={() => setCollageOpen(false)}
           />
+        )}
+        {videoOpen && jobId && (
+          <Suspense fallback={null}>
+            <VideoModal
+              jobId={jobId}
+              events={filteredEvents}
+              photos={curatedPhotoIds().map((id) => photosById.get(id)).filter((p): p is Photo => Boolean(p))}
+              focal={focal}
+              enhancedUrls={Object.fromEntries(
+                (Object.entries(enhanceEntries) as Array<[string, EnhanceEntry]>).filter(([id]) => !showOriginal[id]).map(([id, entry]) => [id, entry.url]),
+              )}
+              onNotify={notify}
+              onClose={() => setVideoOpen(false)}
+            />
+          </Suspense>
         )}
         <ToastStack toasts={toasts} />
       </div>

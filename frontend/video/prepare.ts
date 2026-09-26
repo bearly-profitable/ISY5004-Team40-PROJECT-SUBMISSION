@@ -2,6 +2,7 @@ import type { Event } from '../types';
 import { fetchMediaBlob } from '../lib/analysisApi';
 import { poseForEvent } from '../lib/lumiScenes';
 import type { MovieChapter, MoviePhoto } from './storyboard';
+import { blurredCopy } from './sprites';
 
 /**
  * Getting photos ready for the movie. The frame renderer reads pixels, which
@@ -30,8 +31,9 @@ async function prepareOne(source: PhotoSource, focal: [number, number] | undefin
     ctx.drawImage(bitmap, 0, 0, width, height);
     out = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not resize photo.'))), 'image/jpeg', 0.9));
   }
+  const blurSrc = await blurredCopy(bitmap).catch(() => undefined);
   bitmap.close();
-  return { id: source.id, src: URL.createObjectURL(out), width, height, focal };
+  return { id: source.id, src: URL.createObjectURL(out), width, height, focal, blurSrc };
 }
 
 /** Load photos a few at a time; failures are skipped rather than fatal. */
@@ -62,7 +64,10 @@ export async function preparePhotos(
 }
 
 export function releasePhotos(photos: Iterable<MoviePhoto>): void {
-  for (const p of photos) URL.revokeObjectURL(p.src);
+  for (const p of photos) {
+    URL.revokeObjectURL(p.src);
+    if (p.blurSrc) URL.revokeObjectURL(p.blurSrc);
+  }
 }
 
 /** Moments become chapters, in time order; each opens on its best photo. */

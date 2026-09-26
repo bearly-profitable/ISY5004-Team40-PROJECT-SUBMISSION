@@ -37,18 +37,30 @@ const MOODS: Record<Mood, MoodSpec> = {
   },
 };
 
-function impulse(ctx: BaseAudioContext, seconds: number, decay: number): AudioBuffer {
-  const length = Math.floor(ctx.sampleRate * seconds);
-  const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
-  for (let ch = 0; ch < 2; ch++) {
-    const data = buffer.getChannelData(ch);
-    let seed = ch + 1;
-    for (let i = 0; i < length; i++) {
-      seed = (seed * 16807) % 2147483647;
-      data[i] = ((seed / 2147483647) * 2 - 1) * Math.pow(1 - i / length, decay);
-    }
-  }
-  return buffer;
+/**
+ * A small reverb from damped feedback delays (Schroeder-style). A convolution
+ * reverb sounds similar but costs seconds of CPU over a whole movie.
+ */
+function makeReverb(ctx: BaseAudioContext, decay: number): { input: AudioNode; output: AudioNode } {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const merger = ctx.createChannelMerger(2);
+  merger.connect(output);
+  const times = [0.0297, 0.0371, 0.0411, 0.0437, 0.0507, 0.0571];
+  times.forEach((time, i) => {
+    const delay = ctx.createDelay(1);
+    delay.delayTime.value = time * 1.6;
+    const damp = ctx.createBiquadFilter();
+    damp.type = 'lowpass';
+    damp.frequency.value = 3200;
+    const feedback = ctx.createGain();
+    feedback.gain.value = decay;
+    input.connect(delay);
+    delay.connect(damp).connect(feedback).connect(delay);
+    // Alternate the combs left and right for width.
+    damp.connect(merger, 0, i % 2);
+  });
+  return { input, output };
 }
 
 function noiseBuffer(ctx: BaseAudioContext): AudioBuffer {
@@ -79,11 +91,10 @@ export async function composeSoundtrack({ mood, seconds, dropBeat }: { mood: Moo
   comp.ratio.value = 3;
   master.connect(comp).connect(ctx.destination);
 
-  const reverb = ctx.createConvolver();
-  reverb.buffer = impulse(ctx, mood === 'dreamy' ? 3.2 : 2.2, 2.6);
+  const { input: reverb, output: reverbOut } = makeReverb(ctx, mood === 'dreamy' ? 0.84 : 0.78);
   const reverbGain = ctx.createGain();
-  reverbGain.gain.value = spec.reverb;
-  reverb.connect(reverbGain).connect(master);
+  reverbGain.gain.value = spec.reverb * 0.5;
+  reverbOut.connect(reverbGain).connect(master);
 
   // Echo for the plucks: dotted-eighth feedback delay.
   const delay = ctx.createDelay(2);

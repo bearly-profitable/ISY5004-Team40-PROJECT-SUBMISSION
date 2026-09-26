@@ -19,6 +19,8 @@ export interface MoviePhoto {
   height: number;
   /** Centre of the faces, 0..1 of the image; crops keep it in frame. */
   focal?: [number, number];
+  /** Tiny pre-blurred copy for backdrops (live blur is too slow to export). */
+  blurSrc?: string;
 }
 
 export interface MovieChapter {
@@ -42,10 +44,16 @@ export type ShotLayout = 'single' | 'framed' | 'polaroid' | 'pair' | 'trio' | 'm
 export type Scene =
   | { kind: 'intro'; beats: number; title: string; subtitle: string; photos: MoviePhoto[] }
   | { kind: 'chapter'; beats: number; index: number; total: number; title: string; dateLabel?: string | null; pose: LumiPose; photos: MoviePhoto[] }
-  | { kind: 'shot'; beats: number; layout: ShotLayout; photos: MoviePhoto[]; chapterTitle: string; chapterIndex: number; cameo: Cameo | null; seed: number }
+  | { kind: 'shot'; beats: number; layout: ShotLayout; photos: MoviePhoto[]; chapterTitle: string; chapterIndex: number; cameo: Cameo | null; seed: number; label: ChapterLabel | null }
   | { kind: 'outro'; beats: number; photos: MoviePhoto[] };
 
 export interface Cameo { pose: LumiPose; say: string | null; side: 'left' | 'right' }
+
+/** With many moments, each is named by a lower-third on its first shot instead of a full card. */
+export interface ChapterLabel { title: string; dateLabel?: string | null; pose: LumiPose; index: number; total: number }
+
+/** Beyond this many moments, full chapter cards would drag. */
+const MAX_CHAPTER_CARDS = 6;
 
 export interface TimedScene {
   scene: Scene;
@@ -67,7 +75,8 @@ export interface StoryboardOptions {
   subtitle: string;
   mood: Mood;
   vertical: boolean;
-  /** Longest acceptable movie; packing gets denser until it fits. */
+  /** Longest acceptable movie (default grows with the photo count); packing
+   *  gets denser until it fits. */
   maxSeconds?: number;
 }
 
@@ -111,7 +120,7 @@ const PATTERNS: ShotLayout[][] = [
 ];
 
 /** Seconds a one-photo shot holds, shrinking as the photo count grows. */
-export const singleShotSeconds = (n: number) => Math.min(3.4, Math.max(1.6, 3.4 - 0.035 * n));
+export const singleShotSeconds = (n: number) => Math.min(3.2, Math.max(1.5, 3.2 - 0.045 * n));
 
 function groupChapter(
   photos: MoviePhoto[],
@@ -173,26 +182,31 @@ function buildScenes(chapters: MovieChapter[], opts: StoryboardOptions, level: n
   let cameoGap = 2;
   chapters.forEach((chapter, index) => {
     if (!chapter.photos.length) return;
-    if (chapters.length > 1) {
+    const cards = chapters.length > 1 && chapters.length <= MAX_CHAPTER_CARDS;
+    if (cards) {
       scenes.push({
         kind: 'chapter', beats: chapterBeats, index, total: chapters.length, title: chapter.title,
         dateLabel: chapter.dateLabel, pose: chapter.pose, photos: chapter.photos.slice(0, 3),
       });
     }
-    for (const group of groupChapter(chapter.photos, level, opts.vertical, index)) {
-      // Lumi drops in every few shots, never on busy mosaics.
+    groupChapter(chapter.photos, level, opts.vertical, index).forEach((group, g) => {
+      const label: ChapterLabel | null = !cards && chapters.length > 1 && g === 0
+        ? { title: chapter.title, dateLabel: chapter.dateLabel, pose: chapter.pose, index, total: chapters.length }
+        : null;
+      // Lumi drops in every few shots, never on busy mosaics or labelled shots.
       let cameo: Cameo | null = null;
       cameoGap--;
-      if (cameoGap <= 0 && (group.layout === 'single' || group.layout === 'framed' || group.layout === 'polaroid')) {
+      if (!label && cameoGap <= 0 && (group.layout === 'single' || group.layout === 'framed' || group.layout === 'polaroid')) {
         const line = CAMEO_LINES[Math.floor(random() * CAMEO_LINES.length)];
         cameo = { ...line, side: random() < 0.5 ? 'left' : 'right' };
         cameoGap = 3 + Math.floor(random() * 3);
       }
       scenes.push({
-        kind: 'shot', beats: beatsFor(group.layout, group.photos.length), layout: group.layout, photos: group.photos,
-        chapterTitle: chapter.title, chapterIndex: index, cameo, seed: shotIndex++,
+        // A named shot holds long enough (~2 s) for the name to be read.
+        kind: 'shot', beats: label ? Math.max(beatsFor(group.layout, group.photos.length), Math.ceil(2 / beatSec)) : beatsFor(group.layout, group.photos.length), layout: group.layout, photos: group.photos,
+        chapterTitle: chapter.title, chapterIndex: index, cameo, seed: shotIndex++, label,
       });
-    }
+    });
   });
   scenes.push({ kind: 'outro', beats: Math.max(6, Math.round(4.8 / beatSec)), photos: pickSpread(all, 6) });
   return scenes;
@@ -209,7 +223,7 @@ function pickSpread<T>(list: T[], k: number): T[] {
 function transitionInto(prev: Scene, next: Scene, i: number): TransitionKind {
   if (next.kind === 'outro') return 'fade';
   if (prev.kind === 'intro') return 'rise';
-  if (next.kind === 'chapter') return 'zoom';
+  if (next.kind === 'chapter' || (next.kind === 'shot' && next.label)) return 'zoom';
   if (prev.kind === 'chapter') return 'flash';
   if (next.kind === 'shot' && next.cameo?.pose === 'camera') return 'flash';
   const cycle: TransitionKind[] = ['whip-left', 'rise', 'zoom', 'whip-up', 'fade', 'whip-left', 'rise'];
@@ -221,10 +235,14 @@ const TRANSITION_BEATS: Record<TransitionKind, number> = {
   rise: 1, 'whip-left': 0.75, 'whip-up': 0.75, zoom: 1, flash: 0.5, fade: 1.5,
 };
 
+/** About 14 s plus 1.1 s a photo, up to 100 s. */
+export const targetSeconds = (n: number) => Math.min(100, 14 + 1.1 * n);
+
 export function planStoryboard(chapters: MovieChapter[], opts: StoryboardOptions): Storyboard {
   const beat = beatFrames(opts.mood);
   const beatSec = beat / FPS;
-  const maxFrames = (opts.maxSeconds ?? 90) * FPS;
+  const n = chapters.reduce((sum, c) => sum + c.photos.length, 0);
+  const maxFrames = (opts.maxSeconds ?? targetSeconds(n)) * FPS;
   let timed: TimedScene[] = [];
   let duration = 0;
   for (let level = 0; level < PATTERNS.length; level++) {

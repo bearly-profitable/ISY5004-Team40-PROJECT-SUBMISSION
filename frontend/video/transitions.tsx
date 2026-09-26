@@ -42,11 +42,12 @@ const LuminaPresentation: React.FC<TransitionPresentationComponentProps<Props>> 
       break;
     }
     case 'zoom': {
-      // Fly through the old scene into the new one.
+      // Fly through the old scene into the new one. (No blur: it doubles the
+      // export cost of busy scenes, and the speed sells the move anyway.)
       const e = expoInOut(p);
       style = entering
-        ? { transform: `scale(${0.7 + 0.3 * e})`, opacity: cubicOut(Math.min(1, p * 1.6)), filter: `blur(${(1 - e) * 18}px)` }
-        : { transform: `scale(${1 + 0.6 * e})`, opacity: 1 - Math.max(0, (p - 0.35) / 0.65), filter: `blur(${e * 18}px)` };
+        ? { transform: `scale(${0.72 + 0.28 * e})`, opacity: cubicOut(Math.min(1, p * 1.8)) }
+        : { transform: `scale(${1 + 0.7 * e})`, opacity: 1 - Math.max(0, (p - 0.3) / 0.7) };
       break;
     }
     case 'flash': {
