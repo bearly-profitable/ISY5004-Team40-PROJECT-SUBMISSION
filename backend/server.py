@@ -51,6 +51,10 @@ JOBS_DIR = Path(os.getenv("LUMINA_JOBS_DIR", DATA_DIR / "jobs"))
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = Path(os.getenv("LUMINA_DB_PATH", DATA_DIR / "lumina.db"))
+# Built frontend (the root Dockerfile copies frontend/dist here). When it
+# exists this server also hosts the web app, so one service runs everything.
+_static = Path(os.getenv("LUMINA_STATIC_DIR", ROOT / "static"))
+STATIC_DIR: Path | None = _static.resolve() if (_static / "index.html").is_file() else None
 JOB_TTL_HOURS = float(os.getenv("JOB_TTL_HOURS", "24"))
 # Sessions of signed-in users are kept longer than anonymous ones.
 USER_JOB_TTL_HOURS = float(os.getenv("USER_JOB_TTL_HOURS", "720"))
@@ -250,6 +254,9 @@ _DEV_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 _frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+if not _frontend_url and os.getenv("RAILWAY_PUBLIC_DOMAIN"):
+    # Single-service deploy: this server hosts the frontend on its own domain.
+    _frontend_url = f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN'].strip()}"
 # Local development: no deployed frontend, or one on this machine. Only then do
 # the localhost origins get CORS access and pre-account sessions get listed.
 DEV_MODE = (not _frontend_url) or urlparse(_frontend_url).hostname in ("localhost", "127.0.0.1")
@@ -280,6 +287,26 @@ _SECURITY_HEADERS = {
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
 
+# The web app (served below when a built frontend is present) needs its own
+# scripts, Google Fonts, and https/wss for photos, Supabase and OpenRouter.
+_PAGE_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; "
+        "media-src 'self' data: blob: https:; connect-src 'self' https: wss:; "
+        "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; "
+        "frame-ancestors 'none'" + ("" if DEV_MODE else "; upgrade-insecure-requests")
+    ),
+    "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+}
+if not DEV_MODE:
+    _PAGE_SECURITY_HEADERS["Strict-Transport-Security"] = "max-age=31536000"
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -292,11 +319,19 @@ async def security_headers(request: Request, call_next):
             media_type="application/json",
         )
     response = await call_next(request)
-    for name, value in _SECURITY_HEADERS.items():
+    path = request.url.path
+    is_page = STATIC_DIR is not None and not path.startswith("/api") and path not in ("/docs", "/redoc", "/openapi.json")
+    for name, value in (_PAGE_SECURITY_HEADERS if is_page else _SECURITY_HEADERS).items():
         # Swagger UI (opt-in) needs its own scripts and styles.
-        if name == "Content-Security-Policy" and request.url.path in ("/docs", "/redoc"):
+        if name == "Content-Security-Policy" and path in ("/docs", "/redoc"):
             continue
         response.headers.setdefault(name, value)
+    if is_page and response.status_code == 200 and "cache-control" not in response.headers:
+        # Vite's hashed bundles never change; everything else must revalidate
+        # so a deploy is picked up.
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable" if path.startswith("/assets/") else "no-cache"
+        )
     if (response.headers.get("content-type", "").startswith("application/json")
             and "cache-control" not in response.headers):
         response.headers["Cache-Control"] = "no-store"  # sessions are personal
@@ -1585,3 +1620,29 @@ def _prune_memory_jobs(max_age_s: float = 6 * 3600) -> None:
             for key in [k for k, v in jobs.items() if v.get("createdAt", 0) < cutoff
                         and v.get("status") in ("completed", "failed")]:
                 jobs.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# Web app (single-service deploys). Registered last so every /api route wins.
+# ---------------------------------------------------------------------------
+
+if STATIC_DIR is not None:
+    import mimetypes
+
+    # Slim images and Windows registries don't always know these.
+    for _ext, _type in ((".webp", "image/webp"), (".woff2", "font/woff2"), (".mjs", "text/javascript"),
+                        (".wasm", "application/wasm"), (".webmanifest", "application/manifest+json")):
+        mimetypes.add_type(_type, _ext)
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def web_app(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found.")
+        file = (STATIC_DIR / path).resolve()
+        if (path and file.is_file() and file.is_relative_to(STATIC_DIR)
+                and not any(part.startswith(".") for part in file.relative_to(STATIC_DIR).parts)):
+            return FileResponse(file)
+        if path.startswith("assets/"):
+            raise HTTPException(status_code=404, detail="Not found.")  # stale bundle, not a route
+        # Client-side routes all load the app shell.
+        return FileResponse(STATIC_DIR / "index.html")

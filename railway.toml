@@ -1,0 +1,14 @@
+# Single service: the root Dockerfile builds the web app and serves it from
+# the backend. See README "Deploying to Railway".
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/health"
+# Models are baked into the image, but loading them all on CPU still takes a while.
+healthcheckTimeout = 600
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+# In-memory job progress + SQLite: exactly one instance.
+numReplicas = 1

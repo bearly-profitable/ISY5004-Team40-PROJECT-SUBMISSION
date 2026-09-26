@@ -1,0 +1,31 @@
+# Build context for the root (single-service) Dockerfile.
+.git
+**/node_modules
+**/__pycache__
+**/*.py[cod]
+**/.env*
+**/*.log
+**/*.ipynb
+venv/
+.venv/
+
+# Not part of the app
+.claude/
+.github/
+.vscode/
+Draft*/
+Final*/
+Latex format/
+supabase/
+tools/
+
+# Local data must never be baked into an image
+frontend/dist/
+backend/jobs/
+backend/images/
+backend/outputs/
+backend/outputs_ft/
+backend/static/
+backend/tests/
+backend/lumina.db*
+backend/eval/eval_cache.db*

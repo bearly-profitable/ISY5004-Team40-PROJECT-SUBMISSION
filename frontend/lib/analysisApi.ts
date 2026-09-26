@@ -8,7 +8,10 @@ import type {
 } from '../types';
 import { supabase } from './supabase';
 
-const BACKEND_BASE_URL = ((import.meta.env.VITE_BACKEND_URL as string | undefined) || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+// Unset in a production build means the backend serves this bundle itself,
+// so API calls go to the same origin.
+const BACKEND_BASE_URL = ((import.meta.env.VITE_BACKEND_URL as string | undefined)
+  || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')).replace(/\/+$/, '');
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) ?? '';
 
 /** Stable anonymous id for preference learning, persisted in localStorage. */

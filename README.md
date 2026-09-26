@@ -372,24 +372,30 @@ cd backend
 
 ## Deploying to Railway
 
-1. Connect the repository to [Railway](https://railway.app) and create two services. For each, set
-   **Root Directory** (`/backend`, `/frontend`) and **Config file path** (`/backend/railway.toml`,
-   `/frontend/railway.toml`; Railway does not look inside the root directory for it).
-2. Set the backend's `FRONTEND_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_SITE_URL`, `SUPABASE_URL` and
-   `SUPABASE_ANON_KEY`, and the frontend's `VITE_BACKEND_URL`, `VITE_SUPABASE_URL` and
-   `VITE_SUPABASE_ANON_KEY` (URLs without a trailing slash). The `VITE_*` values are baked in at build
-   time, so redeploy the frontend after changing them. Setting the `LUMINA_API_KEY` / `VITE_API_KEY`
-   pair is recommended.
-3. Add the deployed frontend URL to Supabase's Site URL / allowed redirect URLs, and run the migrations
-   in `supabase/migrations/`.
-4. Attach a volume to the backend at `/data` (any path except `/app`, which holds the code). The server
-   reads `RAILWAY_VOLUME_MOUNT_PATH` and keeps SQLite and uploaded photos there; without a volume every
-   redeploy wipes all sessions.
-5. Check `GET https://<backend>/api/health` returns `{"status": "ok"}`.
+One service runs everything: the root `Dockerfile` builds the React app and the FastAPI backend serves
+it alongside the API on the same domain, so there is no CORS or backend URL to configure.
 
-The backend image installs CPU-only PyTorch and downloads every model weight at build time
-(`prefetch_models.py`), so the first build takes a while but boots skip the ~1 GB download. Loading the
-models still needs several GB of RAM, so give the backend a plan with enough memory.
+1. Create a Railway service from the repository, leaving **Root Directory** empty. Railway reads the root
+   `railway.toml` and builds the root `Dockerfile`.
+2. Set `OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` (the last two are baked into the web app at build time, so redeploy after
+   changing them). Optional: `OPENROUTER_SITE_URL`, and the `LUMINA_API_KEY` / `VITE_API_KEY` pair.
+3. Generate a public domain under **Settings → Networking**. The server picks it up from
+   `RAILWAY_PUBLIC_DOMAIN`; set `FRONTEND_URL` instead if you use a custom domain.
+4. Attach a volume at `/data` (any path except `/app`, which holds the code). The server reads
+   `RAILWAY_VOLUME_MOUNT_PATH` and keeps SQLite and uploaded photos there; without a volume every
+   redeploy wipes all sessions.
+5. Add the domain to Supabase's Site URL / allowed redirect URLs, and run the migrations in
+   `supabase/migrations/`.
+6. Check `GET https://<domain>/api/health` returns `{"status": "ok"}`.
+
+The image installs CPU-only PyTorch and downloads every model weight at build time
+(`backend/prefetch_models.py`), so the first build takes a while but boots skip the ~1 GB download.
+Loading the models still needs several GB of RAM, so give the service a plan with enough memory.
+
+To run the frontend and backend as two services instead, point each at `/backend` or `/frontend` as its
+Root Directory with **Config file path** `/backend/railway.toml` or `/frontend/railway.toml`, and set
+`FRONTEND_URL` on the backend and `VITE_BACKEND_URL` on the frontend.
 
 ---
 
