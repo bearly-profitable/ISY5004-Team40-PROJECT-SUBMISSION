@@ -389,9 +389,10 @@ it alongside the API on the same domain, so there is no CORS or backend URL to c
    `supabase/migrations/`.
 6. Check `GET https://<domain>/api/health` returns `{"status": "ok"}`.
 
-The image installs CPU-only PyTorch and downloads every model weight at build time
-(`backend/prefetch_models.py`), so the first build takes a while but boots skip the ~1 GB download.
-Loading the models still needs several GB of RAM, so give the service a plan with enough memory.
+The image installs CPU-only PyTorch and keeps compilers in a separate build stage. Model weights
+(~2.5 GB) are downloaded on boot rather than baked in, which keeps the image under Railway's size limit;
+the first `/api/health` takes a minute or two while they load. Setting `HF_TOKEN` speeds up the Hugging
+Face downloads. Loading the models needs several GB of RAM, so give the service a plan with enough memory.
 
 To run the frontend and backend as two services instead, point each at `/backend` or `/frontend` as its
 Root Directory with **Config file path** `/backend/railway.toml` or `/frontend/railway.toml`, and set

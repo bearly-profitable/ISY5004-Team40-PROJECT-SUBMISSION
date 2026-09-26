@@ -294,7 +294,8 @@ _PAGE_SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self'; "
+        # 'wasm-unsafe-eval': the video exporter's WebAssembly AAC encoder.
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; "
         "media-src 'self' data: blob: https:; connect-src 'self' https: wss:; "

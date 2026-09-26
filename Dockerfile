@@ -24,28 +24,21 @@ ENV VITE_API_KEY=$VITE_API_KEY \
 
 RUN npm run build
 
-# ---------- server ----------
-FROM python:3.11-slim
+# ---------- python packages ----------
+# Compilers live only in this stage (insightface and hdbscan build from
+# source), so they don't count toward the final image size.
+FROM python:3.11-slim AS deps
 
-WORKDIR /app
-
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# System libraries required by OpenCV, InsightFace (needs cmake/gcc), MediaPipe, and OpenGL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    libgl1 \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
-    libgomp1 \
-    git \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH=/opt/venv/bin:$PATH
+RUN python -m venv /opt/venv
 
 # CPU-only PyTorch: the default Linux wheels bundle CUDA (several GB) that a
 # CPU container never uses. Installed first so requirements.txt reuses it.
@@ -56,15 +49,35 @@ COPY backend/requirements.txt .
 RUN pip install -r requirements.txt
 
 # MediaPipe face model (gitignored, so a git-based build doesn't have it).
-RUN wget -q -O /app/face_landmarker.task \
+RUN wget -q -O /face_landmarker.task \
     https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 
-# Bake model weights into the image so boots don't download ~1 GB.
-# Only the modules the pipeline imports, so code edits don't redo this layer.
-COPY backend/lumina_pipeline.py backend/clip_search.py backend/captioner.py backend/blink.py \
-     backend/curation.py backend/openrouter.py backend/yolov8n.pt backend/prefetch_models.py ./
-RUN python prefetch_models.py
+# ---------- server ----------
+FROM python:3.11-slim
 
+WORKDIR /app
+
+# Runtime libraries for OpenCV and MediaPipe.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PATH=/opt/venv/bin:$PATH \
+    YOLO_CONFIG_DIR=/tmp/Ultralytics
+
+COPY --from=deps /opt/venv /opt/venv
+COPY --from=deps /face_landmarker.task ./face_landmarker.task
+
+# Model weights (~2.5 GB) are NOT baked in: with them the image passes
+# Railway's image size limit. The server downloads them on boot (about a
+# minute) before /api/health turns green.
 COPY backend/ ./
 COPY --from=web /web/dist ./static
 
