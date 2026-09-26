@@ -1,5 +1,5 @@
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Award,
@@ -15,10 +15,14 @@ import {
 } from 'lucide-react';
 import { Event, EventMember, Photo } from '../types';
 import { REJECT_FLAG_UI, SIGNAL_UI } from '../lib/signals';
+import { gsap, prefersReducedMotion } from '../lib/motion';
+import { downloadPhoto as saveFile } from './gallery/shared';
 
 export interface LightboxItem {
   photo: Photo;
   event?: Event | null;
+  /** Shown in the top bar when there is no event (library photos). */
+  subtitle?: string;
 }
 
 interface LightboxProps {
@@ -33,13 +37,13 @@ function fullSrc(photo: Photo): string {
   return photo.fullUrl ?? photo.url;
 }
 
+/** The small version already in the browser cache, shown while the original loads. */
+function previewSrc(photo: Photo): string {
+  return photo.largeUrl ?? photo.url;
+}
+
 function downloadPhoto(photo: Photo) {
-  const a = document.createElement('a');
-  a.href = fullSrc(photo);
-  a.download = photo.name?.trim() || 'photo.jpg';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  saveFile(photo);
 }
 
 const SignalBars: React.FC<{ member: EventMember; compareWith?: EventMember | null }> = ({ member, compareWith }) => (
@@ -104,18 +108,54 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
   const isTop = event ? item?.photo.id === event.topPhotoId : false;
   const canCompare = Boolean(event && bestMember && bestPhoto && !isTop && member);
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const direction = useRef(0);
+  const touchX = useRef<number | null>(null);
+
   const go = useCallback((delta: number) => {
     const next = index + delta;
     if (next >= 0 && next < items.length) {
+      direction.current = delta;
       setLoaded(false);
       setCompare(false);
       onNavigate(next);
     }
   }, [index, items.length, onNavigate]);
 
+  // Open: the backdrop fades while the photo rises into place.
+  useLayoutEffect(() => {
+    if (!rootRef.current || prefersReducedMotion()) return;
+    const tl = gsap.timeline();
+    tl.fromTo(rootRef.current, { opacity: 0 }, { opacity: 1, duration: 0.3, ease: 'power2.out' })
+      .fromTo(stageRef.current, { scale: 0.94, y: 24 }, { scale: 1, y: 0, duration: 0.6, ease: 'expo.out' }, 0);
+    return () => { tl.kill(); };
+  }, []);
+
+  // Each new photo slides in from the side it came from.
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || direction.current === 0 || prefersReducedMotion()) return;
+    gsap.fromTo(stage, { x: 60 * direction.current, opacity: 0 }, { x: 0, opacity: 1, duration: 0.45, ease: 'power3.out' });
+  }, [index]);
+
+  // Warm the neighbours so arrowing through feels instant.
+  useEffect(() => {
+    for (const offset of [1, -1, 2]) {
+      const neighbour = items[index + offset];
+      if (neighbour) new Image().src = fullSrc(neighbour.photo);
+    }
+  }, [index, items]);
+
+  const close = useCallback(() => {
+    if (!rootRef.current || prefersReducedMotion()) { onClose(); return; }
+    gsap.to(stageRef.current, { scale: 0.96, opacity: 0, duration: 0.2, ease: 'power2.in' });
+    gsap.to(rootRef.current, { opacity: 0, duration: 0.25, ease: 'power2.in', onComplete: onClose });
+  }, [onClose]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') close();
       if (e.key === 'ArrowLeft') go(-1);
       if (e.key === 'ArrowRight') go(1);
     };
@@ -127,7 +167,7 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = previousOverflow;
     };
-  }, [go, onClose]);
+  }, [go, close]);
 
   useEffect(() => { setLoaded(false); }, [item?.photo.id]);
 
@@ -135,19 +175,28 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
 
   return createPortal(
     <div
+      ref={rootRef}
       className="fixed inset-0 z-[350] flex flex-col"
-      data-anim="fade" style={{ background: 'rgba(10, 8, 24, 0.92)', backdropFilter: 'blur(14px)' }}
+      style={{ background: 'rgba(14, 10, 22, 0.94)', backdropFilter: 'blur(14px)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={item.photo.name}
     >
       {/* Top bar */}
       <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3.5 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          {event && (
+          {event ? (
             <span className="flex items-center gap-1.5 text-white/60 text-xs min-w-0">
               <CalendarDays className="w-3.5 h-3.5 flex-shrink-0 text-lumina-300" />
               <span className="font-semibold text-white/80 truncate">{event.label}</span>
               {event.dateLabel && <span className="text-white/40 flex-shrink-0">· {event.dateLabel}</span>}
             </span>
-          )}
+          ) : item.subtitle ? (
+            <span className="flex items-center gap-1.5 text-xs min-w-0">
+              <CalendarDays className="w-3.5 h-3.5 flex-shrink-0 text-lumina-300" />
+              <span className="font-semibold text-white/80 truncate">{item.subtitle}</span>
+            </span>
+          ) : null}
           <span className="text-white/35 text-[11px] font-bold tabular-nums flex-shrink-0">
             {index + 1} / {items.length}
           </span>
@@ -184,9 +233,10 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
             <Download className="w-4 h-4" />
           </button>
           <button
-            onClick={onClose}
+            onClick={close}
             className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white/80 hover:bg-white/25 transition-colors"
             title="Close (Esc)"
+            aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
@@ -196,10 +246,20 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
       {/* Body */}
       <div className="flex-1 flex min-h-0">
         {/* Image area */}
-        <div className="flex-1 relative flex items-center justify-center min-w-0 px-2 pb-4">
+        <div
+          className="flex-1 relative flex items-center justify-center min-w-0 px-2 pb-4"
+          onTouchStart={(e) => { touchX.current = e.touches[0].clientX; }}
+          onTouchEnd={(e) => {
+            if (touchX.current === null) return;
+            const dx = e.changedTouches[0].clientX - touchX.current;
+            touchX.current = null;
+            if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
+          }}
+        >
           {!loaded && (
-            <Loader2 className="absolute w-7 h-7 text-white/40 animate-spin" />
+            <Loader2 className="absolute bottom-8 w-5 h-5 text-white/50 animate-spin z-10" />
           )}
+          <div ref={stageRef} className="w-full h-full flex items-center justify-center">
 
           {compare && canCompare && bestPhoto ? (
             <div className="w-full h-full flex gap-2 items-stretch justify-center">
@@ -223,15 +283,26 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
               ))}
             </div>
           ) : (
-            <img
-              key={item.photo.id}
-              src={fullSrc(item.photo)}
-              alt={item.photo.name}
-              className="max-w-full max-h-full object-contain rounded-xl"
-              onLoad={() => setLoaded(true)}
-              onError={() => setLoaded(true)}
-            />
+            <div key={item.photo.id} className="relative w-full h-full flex items-center justify-center">
+              {/* The cached thumbnail holds the frame until the original arrives. */}
+              {!loaded && previewSrc(item.photo) !== fullSrc(item.photo) && (
+                <img
+                  src={previewSrc(item.photo)}
+                  alt=""
+                  aria-hidden
+                  className="absolute inset-0 w-full h-full object-contain blur-[2px]"
+                />
+              )}
+              <img
+                src={fullSrc(item.photo)}
+                alt={item.photo.name}
+                className={`relative max-w-full max-h-full object-contain rounded-xl transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+                onLoad={() => setLoaded(true)}
+                onError={() => setLoaded(true)}
+              />
+            </div>
           )}
+          </div>
 
           {/* Nav arrows */}
           {index > 0 && (
@@ -315,7 +386,7 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
             {/* Promote */}
             {event && !isTop && onMakeBest && (
               <button
-                onClick={() => { onMakeBest(event.id, item.photo.id); onClose(); }}
+                onClick={() => { onMakeBest(event.id, item.photo.id); close(); }}
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-amber-500/90 text-white text-xs font-bold uppercase tracking-widest hover:bg-amber-500 transition-colors"
               >
                 <Crown className="w-3.5 h-3.5" />

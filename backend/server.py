@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import hmac
 import io as io_mod
 import json
+import math
 import os
 import queue
+import re
 import shutil
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 import zipfile
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, List, Optional
+from urllib.parse import urlparse
 
 import numpy as np
 from dotenv import load_dotenv
@@ -21,7 +27,7 @@ import asyncio
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 import collage as collage_mod
@@ -38,15 +44,36 @@ from store import LuminaStore
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent
-JOBS_DIR = Path(os.getenv("LUMINA_JOBS_DIR", ROOT / "jobs"))
+# A container's filesystem is wiped on every deploy. When Railway mounts a
+# volume it sets RAILWAY_VOLUME_MOUNT_PATH; sessions and photos live there.
+DATA_DIR = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or ROOT)
+JOBS_DIR = Path(os.getenv("LUMINA_JOBS_DIR", DATA_DIR / "jobs"))
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_PATH = Path(os.getenv("LUMINA_DB_PATH", ROOT / "lumina.db"))
+DB_PATH = Path(os.getenv("LUMINA_DB_PATH", DATA_DIR / "lumina.db"))
 JOB_TTL_HOURS = float(os.getenv("JOB_TTL_HOURS", "24"))
 # Sessions of signed-in users are kept longer than anonymous ones.
 USER_JOB_TTL_HOURS = float(os.getenv("USER_JOB_TTL_HOURS", "720"))
 MAX_PHOTOS = int(os.getenv("MAX_PHOTOS", "300"))
 API_KEY = (os.getenv("LUMINA_API_KEY") or "").strip()  # empty = auth disabled
+
+# Upload limits. Uploads are decoded by several ML models, so anything that is
+# not a real image is refused at the door rather than deep in the pipeline.
+MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "30"))
+MAX_REQUEST_MB = float(os.getenv("MAX_REQUEST_MB", "2048"))
+_IMAGE_EXTS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif", "BMP": ".bmp",
+               "MPO": ".jpg", "TIFF": ".tif", "HEIF": ".heic", "AVIF": ".avif"}
+
+# Per-caller rate limits (count per window). Enhancement and AI captions spend
+# OpenRouter credit, so they also share a server-wide ceiling.
+RATE_ANALYZE_PER_HOUR = int(os.getenv("RATE_ANALYZE_PER_HOUR", "30"))
+RATE_ENHANCE_PER_HOUR = int(os.getenv("RATE_ENHANCE_PER_HOUR", "20"))
+RATE_ENHANCE_GLOBAL_PER_HOUR = int(os.getenv("RATE_ENHANCE_GLOBAL_PER_HOUR", "100"))
+RATE_COLLAGE_PER_HOUR = int(os.getenv("RATE_COLLAGE_PER_HOUR", "60"))
+RATE_FACE_PER_MINUTE = int(os.getenv("RATE_FACE_PER_MINUTE", "10"))
+
+# Interactive API docs list every route; opt in for local exploration only.
+ENABLE_DOCS = os.getenv("LUMINA_ENABLE_DOCS", "").strip() == "1"
 
 store = LuminaStore(DB_PATH)
 pipeline = LuminaPipeline(store=store)
@@ -129,14 +156,17 @@ def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str]) -> None:
             progress=100,
             result=result,
         )
-    except Exception as exc:
+        threading.Thread(target=prewarm_thumbs, args=(job_id,), daemon=True).start()
+    except Exception:
+        # The traceback stays in the server log; the client gets no internals.
+        print(f"[Lumina] Job {job_id} failed:\n{traceback.format_exc()}")
         update_job(
             job_id,
             persist=True,
             status="failed",
             stepKey="failed",
             stepLabel="Analysis failed",
-            error=str(exc),
+            error="Analysis failed. Check that every file is a valid photo and try again.",
         )
 
 
@@ -172,6 +202,7 @@ def cleanup_loop() -> None:
                     except OSError:
                         pass
             store.cache_prune(max_entries=5000)
+            _prune_memory_jobs()
         except Exception as exc:
             print(f"[Lumina] Cleanup pass failed: {exc}")
         time.sleep(3600)
@@ -219,16 +250,57 @@ _DEV_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 _frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
-_allowed_origins = _DEV_ORIGINS + ([_frontend_url] if _frontend_url else [])
+# Local development: no deployed frontend, or one on this machine. Only then do
+# the localhost origins get CORS access and pre-account sessions get listed.
+DEV_MODE = (not _frontend_url) or urlparse(_frontend_url).hostname in ("localhost", "127.0.0.1")
+_allowed_origins = (_DEV_ORIGINS if DEV_MODE else []) + ([_frontend_url] if _frontend_url else [])
 
-app = FastAPI(title="Lumina Analysis Service", version="2.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Lumina Analysis Service", version="2.0.0", lifespan=lifespan,
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Auth is a bearer header, never a cookie, so credentials stay off.
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Client-Id", "X-API-Key"],
+    expose_headers=["Content-Disposition"],
 )
+
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Refuse oversized bodies up front, and harden every response."""
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_REQUEST_MB * 1024 * 1024:
+        return Response(
+            content=json.dumps({"detail": f"Request too large (max {MAX_REQUEST_MB:.0f} MB)."}),
+            status_code=413,
+            media_type="application/json",
+        )
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        # Swagger UI (opt-in) needs its own scripts and styles.
+        if name == "Content-Security-Policy" and request.url.path in ("/docs", "/redoc"):
+            continue
+        response.headers.setdefault(name, value)
+    if (response.headers.get("content-type", "").startswith("application/json")
+            and "cache-control" not in response.headers):
+        response.headers["Cache-Control"] = "no-store"  # sessions are personal
+    return response
 
 
 @app.middleware("http")
@@ -248,7 +320,8 @@ async def api_key_guard(request: Request, call_next):
         and not request.url.path.startswith(open_paths)
         and not is_sse  # EventSource cannot send headers; job UUID is the bearer
     ):
-        if request.method != "OPTIONS" and request.headers.get("x-api-key", "") != API_KEY:
+        supplied = request.headers.get("x-api-key", "")
+        if request.method != "OPTIONS" and not hmac.compare_digest(supplied.encode(), API_KEY.encode()):
             return Response(
                 content=json.dumps({"detail": "Invalid or missing API key."}),
                 status_code=401,
@@ -268,10 +341,89 @@ def _owner(authorization: Optional[str], client_id: Optional[str]) -> auth.Owner
     return auth.resolve_owner(authorization, client_id)
 
 
-def _owner_id_or_none(authorization: Optional[str], client_id: Optional[str]) -> Optional[str]:
-    """Like _owner, but a caller with no id at all gets None (ownerless)."""
+_JOB_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _valid_job_id(job_id: str) -> str:
+    """Job ids are server-minted UUIDs. Anything else (``..``, ``C:\\``, …)
+    never reaches a filesystem path or the database."""
+    if not _JOB_ID_RE.match(job_id or ""):
+        raise HTTPException(status_code=404, detail="Unknown session id.")
+    return job_id
+
+
+def _require_job(job_id: str, authorization: Optional[str], client_id: Optional[str]) -> None:
+    """404 unless the caller owns this job.
+
+    Jobs made before accounts existed have no owner and stay reachable by
+    their unguessable id. Someone else's job is reported as missing, not
+    forbidden, so ids can't be probed.
+    """
+    _valid_job_id(job_id)
+    exists, job_owner = store.job_owner(job_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="Unknown session id.")
+    if job_owner is None:
+        return
     owner = auth.resolve_owner(authorization, client_id, required=False)
-    return owner.id if owner else None
+    allowed = {owner.id} if owner else set()
+    # A signed-in browser still reaches what it made before its claim ran.
+    if auth.valid_client_id((client_id or "").strip()):
+        allowed.add((client_id or "").strip())
+    if job_owner not in allowed:
+        raise HTTPException(status_code=404, detail="Unknown session id.")
+
+
+class _RateLimiter:
+    """Sliding-window counter per key, in memory (one backend process)."""
+
+    def __init__(self) -> None:
+        self._hits: dict[str, deque] = {}
+        self._lock = threading.Lock()
+
+    def check(self, key: str, limit: int, window_s: float) -> None:
+        if limit <= 0:
+            return
+        now = time.monotonic()
+        with self._lock:
+            hits = self._hits.setdefault(key, deque())
+            while hits and hits[0] <= now - window_s:
+                hits.popleft()
+            if len(hits) >= limit:
+                retry = int(hits[0] + window_s - now) + 1
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many requests. Please wait a little and try again.",
+                    headers={"Retry-After": str(retry)},
+                )
+            hits.append(now)
+            if len(self._hits) > 10000:  # drop idle keys
+                for stale in [k for k, v in self._hits.items() if not v or v[-1] <= now - 3600]:
+                    self._hits.pop(stale, None)
+
+
+rate_limiter = _RateLimiter()
+
+
+def _read_image_upload(payload: bytes, filename: str) -> str:
+    """The extension for a verified image upload, or 400/413.
+
+    The extension comes from the decoded format, never from the client's
+    filename, so a stored upload can't masquerade as HTML or a script.
+    """
+    if len(payload) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"'{safe_filename(filename)[:60]}' is larger than {MAX_UPLOAD_MB:.0f} MB.")
+    from PIL import Image
+
+    try:
+        with Image.open(io_mod.BytesIO(payload)) as img:
+            fmt = (img.format or "").upper()
+            img.verify()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"'{safe_filename(filename)[:60]}' is not a supported image.")
+    if fmt not in _IMAGE_EXTS:
+        raise HTTPException(status_code=400, detail=f"'{safe_filename(filename)[:60]}' is not a supported image.")
+    return _IMAGE_EXTS[fmt]
 
 
 def _get_result_or_404(job_id: str) -> dict:
@@ -297,7 +449,8 @@ async def analyze(
     authorization: Optional[str] = Header(default=None),
     x_client_id: Optional[str] = Header(default=None),
 ) -> AnalyzeJobResponse:
-    owner_id = _owner_id_or_none(authorization, x_client_id)
+    # Every session has an owner; ownerless ones would be listed to everybody.
+    owner_id = _owner(authorization, x_client_id).id
     if not files:
         raise HTTPException(status_code=400, detail="At least one image is required.")
     if len(files) > MAX_PHOTOS:
@@ -306,12 +459,14 @@ async def analyze(
     try:
         meta = json.loads(photoMeta)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid photoMeta JSON: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Invalid photoMeta JSON.") from exc
 
     if not isinstance(meta, list):
         raise HTTPException(status_code=400, detail="photoMeta must be a JSON array.")
     if len(meta) != len(files):
         raise HTTPException(status_code=400, detail="photoMeta length must match uploaded files.")
+
+    rate_limiter.check(f"analyze:{owner_id}", RATE_ANALYZE_PER_HOUR, 3600)
 
     job_id = str(uuid.uuid4())
     input_dir = JOBS_DIR / job_id / "input"
@@ -321,23 +476,28 @@ async def analyze(
     photo_ids: list[str] = []
     photo_map: dict[str, str] = {}  # photoId -> {file, name}
 
-    for idx, upload in enumerate(files):
-        row = meta[idx]
-        photo_id = str(row.get("id", "")).strip()
-        if not photo_id:
-            raise HTTPException(status_code=400, detail=f"Missing photo id at index {idx}.")
+    try:
+        for idx, upload in enumerate(files):
+            row = meta[idx] if isinstance(meta[idx], dict) else {}
+            photo_id = str(row.get("id", "")).strip()
+            if not photo_id or len(photo_id) > 128:
+                raise HTTPException(status_code=400, detail=f"Missing or invalid photo id at index {idx}.")
+            if photo_id in photo_map:
+                raise HTTPException(status_code=400, detail=f"Duplicate photo id at index {idx}.")
+            original_name = str(row.get("name") or upload.filename or f"image_{idx}.jpg")[:255]
 
-        original_name = str(row.get("name", upload.filename or f"image_{idx}.jpg"))
-        ext = Path(original_name).suffix or ".jpg"
-        final_name = f"{idx:04d}_{safe_filename(photo_id)}{ext}"
-        save_path = input_dir / final_name
+            payload = await upload.read(int(MAX_UPLOAD_MB * 1024 * 1024) + 1)
+            ext = _read_image_upload(payload, original_name)
+            final_name = f"{idx:04d}_{safe_filename(photo_id)}{ext}"
+            save_path = input_dir / final_name
+            save_path.write_bytes(payload)
 
-        payload = await upload.read()
-        save_path.write_bytes(payload)
-
-        image_paths.append(save_path)
-        photo_ids.append(photo_id)
-        photo_map[photo_id] = json.dumps({"file": final_name, "name": original_name})
+            image_paths.append(save_path)
+            photo_ids.append(photo_id)
+            photo_map[photo_id] = json.dumps({"file": final_name, "name": original_name})
+    except HTTPException:
+        shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
+        raise
 
     store.create_job(job_id, num_photos=len(files), photo_map=photo_map, owner=owner_id)
     with job_lock:
@@ -356,7 +516,12 @@ async def analyze(
 
 
 @app.get("/api/analyze/{job_id}", response_model=AnalyzeStatusResponse)
-def analyze_status(job_id: str) -> AnalyzeStatusResponse:
+def analyze_status(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> AnalyzeStatusResponse:
+    _require_job(job_id, authorization, x_client_id)
     with job_lock:
         job = job_store.get(job_id)
         if job is not None:
@@ -395,7 +560,12 @@ def _current_status(job_id: str) -> Optional[dict[str, Any]]:
 @app.get("/api/analyze/{job_id}/stream")
 async def analyze_stream(job_id: str) -> StreamingResponse:
     """Server-Sent Events progress stream — pushes status ~4x/second while
-    the job runs, ends with the completed/failed payload. Replaces polling."""
+    the job runs, ends with the completed/failed frame. Replaces polling.
+
+    EventSource cannot send headers, so the stream is reachable by job id
+    alone and never carries the result; the client fetches that from the
+    authenticated GET /api/analyze/{job_id} once it sees "completed"."""
+    _valid_job_id(job_id)
     if _current_status(job_id) is None:
         raise HTTPException(status_code=404, detail="Unknown job id.")
 
@@ -411,6 +581,7 @@ async def analyze_stream(job_id: str) -> StreamingResponse:
                          status.get("imagesDone"), status.get("status"))
             if terminal or frame_key != last_sent:
                 last_sent = frame_key
+                status.pop("result", None)
                 yield f"data: {json.dumps(status)}\n\n"
             if terminal:
                 break
@@ -435,10 +606,14 @@ def list_sessions(
     """The caller's own sessions. Anonymous browsers also still see the
     ownerless sessions made before accounts existed, as everyone did then."""
     owner = auth.resolve_owner(authorization, x_client_id, required=False)
+    # Ownerless sessions predate accounts. On a deployed server nobody can
+    # prove they made them, so they are never listed to arbitrary callers.
     if owner is None:
-        return {"sessions": store.list_sessions(limit=200, owner=None), "signedIn": False}
+        legacy = store.list_sessions(limit=200, owner=None) if DEV_MODE else []
+        return {"sessions": legacy, "signedIn": False}
     return {
-        "sessions": store.list_sessions(limit=200, owner=owner.id, include_legacy=not owner.signed_in),
+        "sessions": store.list_sessions(limit=200, owner=owner.id,
+                                        include_legacy=DEV_MODE and not owner.signed_in),
         "signedIn": owner.signed_in,
     }
 
@@ -468,11 +643,7 @@ def delete_session(
     photos/thumbnails on disk. Re-analysing the same images afterwards runs
     a completely fresh job (per-image features stay cached by content hash,
     so the re-run is fast but re-scored from scratch)."""
-    owner_id = _owner_id_or_none(authorization, x_client_id)
-    exists, job_owner = store.job_owner(job_id)
-    # Someone else's session is reported as missing, not as forbidden.
-    if not exists or (job_owner is not None and job_owner != owner_id):
-        raise HTTPException(status_code=404, detail="Unknown session id.")
+    _require_job(job_id, authorization, x_client_id)
     if not store.delete_job(job_id):
         raise HTTPException(status_code=404, detail="Unknown session id.")
     with job_lock:
@@ -482,7 +653,12 @@ def delete_session(
 
 
 @app.get("/api/sessions/{job_id}")
-def get_session(job_id: str) -> dict:
+def get_session(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    _require_job(job_id, authorization, x_client_id)
     job = store.get_job(job_id)
     if job is None or job["status"] != "completed" or job["result"] is None:
         raise HTTPException(status_code=404, detail="No completed session with this id.")
@@ -509,6 +685,7 @@ _MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"
 
 
 def _photo_path(job_id: str, photo_id: str) -> Path:
+    _valid_job_id(job_id)
     photo_map = store.get_photo_map(job_id)
     raw = photo_map.get(photo_id)
     if raw is None:
@@ -520,14 +697,15 @@ def _photo_path(job_id: str, photo_id: str) -> Path:
         file_name = str(raw)
     path = (JOBS_DIR / job_id / "input" / file_name).resolve()
     # photo_map filenames are server-generated, but never trust a path join
-    if not str(path).startswith(str((JOBS_DIR / job_id).resolve())):
+    if not path.is_relative_to((JOBS_DIR / job_id).resolve()):
         raise HTTPException(status_code=400, detail="Invalid photo path.")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Photo file no longer exists (expired).")
     return path
 
 
-_THUMB_WIDTHS = {200, 400, 800}
+# 1920 feeds the 1080p "Create video" export.
+_THUMB_WIDTHS = {200, 400, 800, 1920}
 
 
 @app.get("/api/photos/{job_id}/{photo_id}")
@@ -546,22 +724,53 @@ def get_photo(job_id: str, photo_id: str, w: int | None = None) -> FileResponse:
     if w not in _THUMB_WIDTHS:
         raise HTTPException(status_code=400, detail=f"w must be one of {sorted(_THUMB_WIDTHS)}.")
 
-    thumb_dir = JOBS_DIR / job_id / "thumbs"
-    thumb_path = thumb_dir / f"{w}_{path.stem}.jpg"
-    if not thumb_path.is_file():
-        from PIL import Image, ImageOps
-
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            with Image.open(path) as img:
-                img = ImageOps.exif_transpose(img).convert("RGB")
-                if img.width > w:
-                    img = img.resize((w, max(1, round(img.height * w / img.width))), Image.LANCZOS)
-                img.save(thumb_path, format="JPEG", quality=82)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Thumbnail failed: {exc}") from exc
+    try:
+        thumb_path = _ensure_thumb(job_id, path, w)
+    except Exception as exc:
+        print(f"[Lumina] Thumbnail failed for {job_id}/{photo_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Thumbnail failed.") from exc
     return FileResponse(thumb_path, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+def _ensure_thumb(job_id: str, path: Path, w: int) -> Path:
+    """The cached `w`-wide JPEG of `path`, generating it if needed.
+
+    Written to a temp file and renamed into place, so the prewarm thread and a
+    request for the same thumbnail can never serve each other half a file.
+    """
+    thumb_dir = JOBS_DIR / job_id / "thumbs"
+    thumb_path = thumb_dir / f"{w}_{path.stem}.jpg"
+    if thumb_path.is_file():
+        return thumb_path
+    from PIL import Image, ImageOps
+
+    # No `parents`: a job deleted mid-prewarm must not have its folder recreated.
+    thumb_dir.mkdir(exist_ok=True)
+    tmp_path = thumb_dir / f".{w}_{path.stem}.{uuid.uuid4().hex}.tmp"
+    with Image.open(path) as img:
+        img.draft("RGB", (w, w))  # JPEG: decode at a reduced scale, much faster
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        if img.width > w:
+            img = img.resize((w, max(1, round(img.height * w / img.width))), Image.LANCZOS)
+        img.save(tmp_path, format="JPEG", quality=82, optimize=True, progressive=True)
+    os.replace(tmp_path, thumb_path)
+    return thumb_path
+
+
+def prewarm_thumbs(job_id: str) -> None:
+    """Build every grid thumbnail right after an analysis, so the gallery's
+    first paint does not wait on dozens of on-demand resizes."""
+    photo_map = store.get_photo_map(job_id)
+    for w in (400, 800):
+        for photo_id in photo_map:
+            try:
+                _ensure_thumb(job_id, _photo_path(job_id, photo_id), w)
+            except Exception:
+                continue  # the on-demand path reports real errors
+    # Deleted while we were writing: finish the removal the delete started.
+    if not store.job_owner(job_id)[0]:
+        shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -569,13 +778,19 @@ def get_photo(job_id: str, photo_id: str, w: int | None = None) -> FileResponse:
 # ---------------------------------------------------------------------------
 
 class SearchRequest(BaseModel):
-    query: str
-    topK: int = 12
-    personId: Optional[str] = None  # restrict to one identity's photos
+    query: str = Field(max_length=500)
+    topK: int = Field(default=12, ge=1, le=50)
+    personId: Optional[str] = Field(default=None, max_length=128)  # restrict to one identity's photos
 
 
 @app.post("/api/search/{job_id}")
-def search(job_id: str, body: SearchRequest) -> dict:
+def search(
+    job_id: str,
+    body: SearchRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    _require_job(job_id, authorization, x_client_id)
     query = body.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query must not be empty.")
@@ -611,10 +826,10 @@ def search(job_id: str, body: SearchRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 class FeedbackRequest(BaseModel):
-    jobId: str
-    eventId: str
-    winnerPhotoId: str
-    loserPhotoId: str
+    jobId: str = Field(max_length=64)
+    eventId: str = Field(max_length=128)
+    winnerPhotoId: str = Field(max_length=128)
+    loserPhotoId: str = Field(max_length=128)
 
 
 def _norm_signals_for(result: dict, event_id: str, photo_id: str) -> Optional[dict]:
@@ -634,6 +849,7 @@ def submit_feedback(
     x_client_id: Optional[str] = Header(default=None),
 ) -> dict:
     client_id = _owner(authorization, x_client_id).id
+    _require_job(body.jobId, authorization, x_client_id)
     result = _get_result_or_404(body.jobId)
 
     winner_sig = _norm_signals_for(result, body.eventId, body.winnerPhotoId)
@@ -692,7 +908,7 @@ def reset_preferences(
 
 
 class PreferenceWeightsRequest(BaseModel):
-    weights: dict[str, float]
+    weights: dict[str, float] = Field(max_length=32)
 
 
 @app.put("/api/preferences")
@@ -706,6 +922,8 @@ def set_preferences(
     client_id = _owner(authorization, x_client_id).id
     if set(body.weights) != set(DEFAULT_WEIGHTS):
         raise HTTPException(status_code=400, detail=f"weights must have exactly: {sorted(DEFAULT_WEIGHTS)}")
+    if not all(math.isfinite(v) for v in body.weights.values()):
+        raise HTTPException(status_code=400, detail="weights must be finite numbers.")
     raw = [max(0.0, float(body.weights[k])) for k in DEFAULT_WEIGHTS]
     if sum(raw) <= 0:
         raise HTTPException(status_code=400, detail="At least one weight must be above zero.")
@@ -728,6 +946,7 @@ def rescore(
     weighting so different users can each see their own view.
     """
     client_id = _owner(authorization, x_client_id).id
+    _require_job(job_id, authorization, x_client_id)
     result = _get_result_or_404(job_id)
     model = PreferenceModel.from_dict(store.get_preferences(client_id))
 
@@ -750,16 +969,22 @@ def rescore(
 # ---------------------------------------------------------------------------
 
 class CorrectionRequest(BaseModel):
-    action: str  # rename_person | merge_persons | move_photo | set_best | rename_event | delete_event
-    personId: Optional[str] = None
-    targetPersonId: Optional[str] = None
-    photoId: Optional[str] = None
-    eventId: Optional[str] = None
-    label: Optional[str] = None
+    action: str = Field(max_length=32)  # rename_person | merge_persons | move_photo | set_best | rename_event | delete_event
+    personId: Optional[str] = Field(default=None, max_length=128)
+    targetPersonId: Optional[str] = Field(default=None, max_length=128)
+    photoId: Optional[str] = Field(default=None, max_length=128)
+    eventId: Optional[str] = Field(default=None, max_length=128)
+    label: Optional[str] = Field(default=None, max_length=120)
 
 
 @app.post("/api/corrections/{job_id}")
-def apply_correction(job_id: str, body: CorrectionRequest) -> dict:
+def apply_correction(
+    job_id: str,
+    body: CorrectionRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
+    _require_job(job_id, authorization, x_client_id)
     result = _get_result_or_404(job_id)
     try:
         if body.action == "rename_person":
@@ -775,7 +1000,7 @@ def apply_correction(job_id: str, body: CorrectionRequest) -> dict:
         elif body.action == "delete_event":
             result = corrections_mod.delete_event(result, body.eventId or "")
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown action: {body.action}")
+            raise HTTPException(status_code=400, detail="Unknown action.")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -789,12 +1014,18 @@ def apply_correction(job_id: str, body: CorrectionRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 class ExportRequest(BaseModel):
-    photoIds: List[str]
-    albumName: str = "lumina-album"
+    photoIds: List[str] = Field(max_length=MAX_PHOTOS)
+    albumName: str = Field(default="lumina-album", max_length=120)
 
 
 @app.post("/api/export/{job_id}")
-def export_album(job_id: str, body: ExportRequest):
+def export_album(
+    job_id: str,
+    body: ExportRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+):
+    _require_job(job_id, authorization, x_client_id)
     if not body.photoIds:
         raise HTTPException(status_code=400, detail="photoIds must not be empty.")
     _get_result_or_404(job_id)
@@ -841,7 +1072,7 @@ def _enhanced_dir(job_id: str) -> Path:
 
 def _enhanced_path(job_id: str, photo_id: str) -> Path:
     """Enhanced files live beside the job inputs, so TTL cleanup removes them."""
-    return _enhanced_dir(job_id) / f"{safe_filename(photo_id)}.jpg"
+    return _enhanced_dir(_valid_job_id(job_id)) / f"{safe_filename(photo_id)}.jpg"
 
 
 def list_enhanced(job_id: str) -> list[str]:
@@ -854,9 +1085,9 @@ def list_enhanced(job_id: str) -> list[str]:
 
 
 class EnhanceRequest(BaseModel):
-    jobId: str
-    photoId: str
-    style: str = enhance_mod.DEFAULT_STYLE
+    jobId: str = Field(max_length=64)
+    photoId: str = Field(max_length=128)
+    style: str = Field(default=enhance_mod.DEFAULT_STYLE, max_length=32)
 
 
 class EnhanceJobResponse(BaseModel):
@@ -944,12 +1175,21 @@ def run_enhance(enhance_id: str, job_id: str, photo_id: str, source: Path, style
             model=outcome.model,
             url=f"/api/enhanced/{job_id}/{photo_id}",
         )
-    except Exception as exc:
+    except openrouter.OpenRouterError as exc:
         update_enhance_job(enhance_id, status="failed", error=str(exc))
+    except Exception:
+        print(f"[Lumina] Enhancement {enhance_id} failed:\n{traceback.format_exc()}")
+        update_enhance_job(enhance_id, status="failed", error="Enhancement failed. Please try again.")
 
 
 @app.post("/api/enhance", response_model=EnhanceJobResponse)
-def start_enhance(body: EnhanceRequest) -> EnhanceJobResponse:
+def start_enhance(
+    body: EnhanceRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> EnhanceJobResponse:
+    owner = _owner(authorization, x_client_id)
+    _require_job(body.jobId, authorization, x_client_id)
     if not openrouter.is_configured():
         raise HTTPException(
             status_code=503,
@@ -967,6 +1207,9 @@ def start_enhance(body: EnhanceRequest) -> EnhanceJobResponse:
         )
     _get_result_or_404(body.jobId)
     source = _photo_path(body.jobId, body.photoId)
+    # Each edit spends OpenRouter credit: cap it per caller and server-wide.
+    rate_limiter.check(f"enhance:{owner.id}", RATE_ENHANCE_PER_HOUR, 3600)
+    rate_limiter.check("enhance:*", RATE_ENHANCE_GLOBAL_PER_HOUR, 3600)
 
     enhance_id = uuid.uuid4().hex
     with enhance_job_lock:
@@ -975,6 +1218,8 @@ def start_enhance(body: EnhanceRequest) -> EnhanceJobResponse:
             "status": "queued",
             "jobId": body.jobId,
             "photoId": body.photoId,
+            "owner": owner.id,
+            "createdAt": time.time(),
         }
     threading.Thread(
         target=run_enhance,
@@ -985,10 +1230,15 @@ def start_enhance(body: EnhanceRequest) -> EnhanceJobResponse:
 
 
 @app.get("/api/enhance/{enhance_id}", response_model=EnhanceStatusResponse)
-def enhance_status(enhance_id: str) -> EnhanceStatusResponse:
+def enhance_status(
+    enhance_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> EnhanceStatusResponse:
+    owner = _owner(authorization, x_client_id)
     with enhance_job_lock:
         job = enhance_job_store.get(enhance_id)
-        if job is None:
+        if job is None or job.get("owner") not in (owner.id, (x_client_id or "").strip()):
             raise HTTPException(status_code=404, detail="Unknown enhancement id.")
         return EnhanceStatusResponse(**job)
 
@@ -1002,8 +1252,14 @@ def get_enhanced(job_id: str, photo_id: str) -> FileResponse:
 
 
 @app.delete("/api/enhanced/{job_id}/{photo_id}")
-def delete_enhanced(job_id: str, photo_id: str) -> dict:
+def delete_enhanced(
+    job_id: str,
+    photo_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> dict:
     """Revert to the original - the enhanced file is a derived artefact."""
+    _require_job(job_id, authorization, x_client_id)
     _enhanced_path(job_id, photo_id).unlink(missing_ok=True)
     return {"ok": True}
 
@@ -1013,10 +1269,10 @@ def delete_enhanced(job_id: str, photo_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 class CollageRequest(BaseModel):
-    photoIds: List[str]
-    title: str = ""
-    subtitle: str = ""
-    theme: str = collage_mod.DEFAULT_THEME
+    photoIds: List[str] = Field(max_length=MAX_PHOTOS)
+    title: str = Field(default="", max_length=120)
+    subtitle: str = Field(default="", max_length=160)
+    theme: str = Field(default=collage_mod.DEFAULT_THEME, max_length=32)
     autoTitle: bool = False
     captions: bool = True
     aiCaptions: bool = False
@@ -1027,7 +1283,7 @@ class CollageRequest(BaseModel):
     #: Lumi on the divider and cast pages and in the corner of photo pages,
     #: and which outfit (colourway) Lumi wears.
     character: bool = False
-    characterOutfit: str = mascot.DEFAULT_OUTFIT
+    characterOutfit: str = Field(default=mascot.DEFAULT_OUTFIT, max_length=32)
 
 
 @app.get("/api/collage/themes")
@@ -1209,12 +1465,22 @@ def _collage_spec(job_id: str, body: CollageRequest) -> collage_mod.CollageSpec:
 
 
 @app.post("/api/collage/{job_id}")
-def build_collage(job_id: str, body: CollageRequest):
+def build_collage(
+    job_id: str,
+    body: CollageRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+):
+    owner = _owner(authorization, x_client_id)
+    _require_job(job_id, authorization, x_client_id)
+    # PDFs are CPU-heavy and AI captions/titles spend credit.
+    rate_limiter.check(f"collage:{owner.id}", RATE_COLLAGE_PER_HOUR, 3600)
     spec = _collage_spec(job_id, body)
     try:
         pdf = collage_mod.build_collage_pdf(spec)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Collage failed: {exc}") from exc
+        print(f"[Lumina] Collage failed for {job_id}:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Collage failed.") from exc
 
     name = safe_filename(spec.title) or "lumina-album"
     return Response(
@@ -1246,27 +1512,38 @@ def update_face_job(job_id: str, **fields: Any) -> None:
             face_job_store[job_id].update(fields)
 
 
+# Face analysis runs one at a time; the rate limit keeps the queue short.
+_face_slots = threading.Semaphore(1)
+
+
 def run_face_analysis(job_id: str, image_path: Path) -> None:
     try:
-        update_face_job(job_id, status="running", progress=10)
-        result = face_analyzer.analyze(image_path)
+        with _face_slots:
+            update_face_job(job_id, status="running", progress=10)
+            result = face_analyzer.analyze(image_path)
         update_face_job(job_id, status="completed", progress=100, result=result)
-    except Exception as exc:
-        update_face_job(job_id, status="failed", error=str(exc))
+    except Exception:
+        print(f"[Lumina] Face analysis {job_id} failed:\n{traceback.format_exc()}")
+        update_face_job(job_id, status="failed", error="Face analysis failed for this photo.")
 
 
 @app.post("/api/face-analysis", response_model=FaceAnalysisJobResponse)
-async def face_analysis(file: UploadFile = File(...)) -> FaceAnalysisJobResponse:
+async def face_analysis(
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> FaceAnalysisJobResponse:
+    owner = _owner(authorization, x_client_id)
     if not file.filename:
         raise HTTPException(status_code=400, detail="An image file is required.")
+    rate_limiter.check(f"face:{owner.id}", RATE_FACE_PER_MINUTE, 60)
+    payload = await file.read(int(MAX_UPLOAD_MB * 1024 * 1024) + 1)
+    ext = _read_image_upload(payload, file.filename)
 
     job_id = str(uuid.uuid4())
     input_dir = JOBS_DIR / job_id / "face_input"
     input_dir.mkdir(parents=True, exist_ok=True)
-
-    ext = Path(file.filename).suffix or ".jpg"
     save_path = input_dir / f"photo{ext}"
-    payload = await file.read()
     save_path.write_bytes(payload)
 
     with face_job_lock:
@@ -1276,6 +1553,8 @@ async def face_analysis(file: UploadFile = File(...)) -> FaceAnalysisJobResponse
             "progress": 0,
             "result": None,
             "error": None,
+            "owner": owner.id,
+            "createdAt": time.time(),
         }
 
     thread = threading.Thread(target=run_face_analysis, args=(job_id, save_path), daemon=True)
@@ -1284,9 +1563,25 @@ async def face_analysis(file: UploadFile = File(...)) -> FaceAnalysisJobResponse
 
 
 @app.get("/api/face-analysis/{job_id}", response_model=FaceAnalysisStatusResponse)
-def face_analysis_status(job_id: str) -> FaceAnalysisStatusResponse:
+def face_analysis_status(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+    x_client_id: Optional[str] = Header(default=None),
+) -> FaceAnalysisStatusResponse:
+    owner = _owner(authorization, x_client_id)
     with face_job_lock:
         job = face_job_store.get(job_id)
-        if job is None:
+        if job is None or job.get("owner") not in (owner.id, (x_client_id or "").strip()):
             raise HTTPException(status_code=404, detail="Unknown face analysis job id.")
         return FaceAnalysisStatusResponse(**job)
+
+
+def _prune_memory_jobs(max_age_s: float = 6 * 3600) -> None:
+    """Drop finished enhancement / face-analysis records (they only back
+    short polling loops) so the in-memory stores can't grow without bound."""
+    cutoff = time.time() - max_age_s
+    for lock, jobs in ((enhance_job_lock, enhance_job_store), (face_job_lock, face_job_store)):
+        with lock:
+            for key in [k for k, v in jobs.items() if v.get("createdAt", 0) < cutoff
+                        and v.get("status") in ("completed", "failed")]:
+                jobs.pop(key, None)

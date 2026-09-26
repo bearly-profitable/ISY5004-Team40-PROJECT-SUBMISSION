@@ -63,6 +63,7 @@ def _tiny_jpeg() -> bytes:
 
 
 TINY_JPEG = _tiny_jpeg()
+OWNER = {"X-Client-Id": "tester-default"}
 
 
 @pytest.fixture(scope="module")
@@ -71,6 +72,7 @@ def client(tmp_path_factory):
     os.environ["LUMINA_DB_PATH"] = str(tmp / "test.db")
     os.environ["LUMINA_JOBS_DIR"] = str(tmp / "jobs")
     os.environ.pop("LUMINA_API_KEY", None)
+    os.environ["RATE_ANALYZE_PER_HOUR"] = "1000"
 
     # Force a clean import so the env vars take effect
     sys.modules.pop("server", None)
@@ -79,11 +81,12 @@ def client(tmp_path_factory):
     server.pipeline._load_models = lambda: None
     server.pipeline.run = lambda image_paths, photo_ids, callback=None: json.loads(json.dumps(CANNED_RESULT))
 
-    with TestClient(server.app) as test_client:
+    # Every session has an owner: this is the browser the tests act as.
+    with TestClient(server.app, headers=OWNER) as test_client:
         yield test_client, server
 
 
-def _start_and_finish_job(client_and_server):
+def _start_and_finish_job(client_and_server, headers=OWNER):
     test_client, server = client_and_server
     files = [
         ("files", ("a.jpg", io.BytesIO(TINY_JPEG), "image/jpeg")),
@@ -93,7 +96,7 @@ def _start_and_finish_job(client_and_server):
         {"id": "photo-a", "name": "a.jpg", "size": "1 KB"},
         {"id": "photo-b", "name": "b.jpg", "size": "1 KB"},
     ])
-    resp = test_client.post("/api/analyze", files=files, data={"photoMeta": meta})
+    resp = test_client.post("/api/analyze", headers=headers, files=files, data={"photoMeta": meta})
     assert resp.status_code == 200
     job_id = resp.json()["jobId"]
     server.job_queue.join()  # wait for the single worker to finish
@@ -133,8 +136,8 @@ def test_analyze_roundtrip_and_persistence(client):
 
 def test_feedback_updates_preferences_and_pins_best(client):
     test_client, _ = client
-    job_id = _start_and_finish_job(client)
     headers = {"X-Client-Id": "tester-1"}
+    job_id = _start_and_finish_job(client, headers)
 
     resp = test_client.post("/api/feedback", headers=headers, json={
         "jobId": job_id, "eventId": "event_0",
@@ -143,7 +146,7 @@ def test_feedback_updates_preferences_and_pins_best(client):
     assert resp.status_code == 200
     assert resp.json()["nUpdates"] == 1
 
-    session = test_client.get(f"/api/sessions/{job_id}").json()
+    session = test_client.get(f"/api/sessions/{job_id}", headers=headers).json()
     evt = session["result"]["events"][0]
     assert evt["topPhotoId"] == "photo-b"
     assert evt["userPinned"] is True
@@ -161,7 +164,7 @@ def test_feedback_updates_preferences_and_pins_best(client):
 
 def test_feedback_requires_client_id(client):
     test_client, _ = client
-    resp = test_client.post("/api/feedback", json={
+    resp = test_client.post("/api/feedback", headers={"X-Client-Id": ""}, json={
         "jobId": "x", "eventId": "e", "winnerPhotoId": "a", "loserPhotoId": "b",
     })
     assert resp.status_code == 400
@@ -237,7 +240,8 @@ def test_sse_stream_ends_with_terminal_frame(client):
     frames = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
     assert frames
     assert frames[-1]["status"] == "completed"
-    assert frames[-1]["result"]["summary"]["numEvents"] == 1
+    # The stream is unauthenticated, so the result is fetched separately.
+    assert all("result" not in frame for frame in frames)
 
     missing = test_client.get("/api/analyze/nonexistent/stream")
     assert missing.status_code == 404

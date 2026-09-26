@@ -2,8 +2,10 @@
 export interface Photo {
   id: string;
   url: string;
-  /** Full-resolution URL when `url` is a thumbnail (restored sessions). */
+  /** Full-resolution URL when `url` is a thumbnail. */
   fullUrl?: string;
+  /** A sharper thumbnail for large tiles (hero shots). */
+  largeUrl?: string;
   name: string;
   size: string;
   source?: 'local' | 'session';
@@ -69,8 +71,12 @@ export interface BestByPerson {
 export type MmrMode = 'safe' | 'balanced' | 'diverse';
 
 export interface EventAutoLabel {
-  label: string;
+  /** Scene word ("Beach") that picks Lumi's outfit; null if none fits. */
+  label: string | null;
   confidence: number;
+  /** 'vision' when a vision LLM wrote the event's title; CLIP otherwise. */
+  source?: 'clip' | 'vision';
+  model?: string;
 }
 
 export interface Event {

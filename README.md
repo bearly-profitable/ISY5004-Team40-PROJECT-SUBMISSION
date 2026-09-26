@@ -372,16 +372,24 @@ cd backend
 
 ## Deploying to Railway
 
-1. Connect the repository to [Railway](https://railway.app) and create two services, one for `backend/`
-   and one for `frontend/`. Railway picks up each `Dockerfile`.
-2. Set the backend's `FRONTEND_URL`, `OPENROUTER_API_KEY`, `SUPABASE_URL` and `SUPABASE_ANON_KEY`, and
-   the frontend's `VITE_BACKEND_URL`, `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Setting the
-   `LUMINA_API_KEY` / `VITE_API_KEY` pair is recommended.
-3. Add the deployed frontend URL to Supabase's allowed redirect URLs.
-4. Check `GET https://<backend>/api/health` returns `{"status": "ok"}`.
+1. Connect the repository to [Railway](https://railway.app) and create two services. For each, set
+   **Root Directory** (`/backend`, `/frontend`) and **Config file path** (`/backend/railway.toml`,
+   `/frontend/railway.toml`; Railway does not look inside the root directory for it).
+2. Set the backend's `FRONTEND_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_SITE_URL`, `SUPABASE_URL` and
+   `SUPABASE_ANON_KEY`, and the frontend's `VITE_BACKEND_URL`, `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` (URLs without a trailing slash). The `VITE_*` values are baked in at build
+   time, so redeploy the frontend after changing them. Setting the `LUMINA_API_KEY` / `VITE_API_KEY`
+   pair is recommended.
+3. Add the deployed frontend URL to Supabase's Site URL / allowed redirect URLs, and run the migrations
+   in `supabase/migrations/`.
+4. Attach a volume to the backend at `/data` (any path except `/app`, which holds the code). The server
+   reads `RAILWAY_VOLUME_MOUNT_PATH` and keeps SQLite and uploaded photos there; without a volume every
+   redeploy wipes all sessions.
+5. Check `GET https://<backend>/api/health` returns `{"status": "ok"}`.
 
-SQLite lives on the container's filesystem, so attach a Railway volume at `backend/` if sessions should
-survive redeploys.
+The backend image installs CPU-only PyTorch and downloads every model weight at build time
+(`prefetch_models.py`), so the first build takes a while but boots skip the ~1 GB download. Loading the
+models still needs several GB of RAM, so give the backend a plan with enough memory.
 
 ---
 

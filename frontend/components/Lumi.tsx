@@ -13,11 +13,18 @@ export type LumiPose =
 
 export const lumiSrc = (pose: LumiPose): string => `/lumi/${pose}.webp`;
 
+/** Poses with a looping animation in /public/lumi/anim, made from Veo clips by
+ *  tools/mascot/phase4_loops.py. Every other pose falls back to its still. */
+const ANIMATED_POSES = new Set<LumiPose>(['star']);
+
+export const lumiAnimSrc = (pose: LumiPose): string | null =>
+  ANIMATED_POSES.has(pose) ? `/lumi/anim/${pose}.webp` : null;
+
 /** Warm the browser cache so a pose swap never shows an empty frame. */
-export function preloadPoses(poses: LumiPose[]): void {
+export function preloadPoses(poses: LumiPose[], { animated = false } = {}): void {
   for (const pose of poses) {
     const img = new Image();
-    img.src = lumiSrc(pose);
+    img.src = (animated && lumiAnimSrc(pose)) || lumiSrc(pose);
   }
 }
 
@@ -35,12 +42,15 @@ interface LumiProps {
   className?: string;
   /** Describe Lumi for screen readers when the pose itself carries meaning. */
   alt?: string;
+  /** Play the pose's animated loop, if it has one (stills under reduced motion). */
+  animate?: boolean;
 }
 
 /** Lumi, Lumina's mascot, in one of the pre-rendered poses. */
 export const Lumi: React.FC<LumiProps> = ({
-  pose, size = 140, float = true, flip = false, say, bubble = 'right', className = '', alt,
+  pose, size = 140, float = true, flip = false, say, bubble = 'right', className = '', alt, animate = false,
 }) => {
+  const src = (animate && !prefersReducedMotion() && lumiAnimSrc(pose)) || lumiSrc(pose);
   const bodyRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
@@ -84,7 +94,7 @@ export const Lumi: React.FC<LumiProps> = ({
         <div className="h-full" style={{ transform: flip ? 'scaleX(-1)' : undefined }}>
           <img
             ref={imgRef}
-            src={lumiSrc(pose)}
+            src={src}
             alt={alt ?? ''}
             aria-hidden={alt ? undefined : true}
             draggable={false}

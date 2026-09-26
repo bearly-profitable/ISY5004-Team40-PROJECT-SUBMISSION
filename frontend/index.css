@@ -1042,3 +1042,56 @@ body {
   transform: translateY(-4px) scale(1.015);
   box-shadow: 0 20px 60px rgba(0,0,0,0.22), 0 4px 16px rgba(0,0,0,0.12);
 }
+
+/* --------------------------------
+   18. Gallery (pages/SmartGallery + components/gallery)
+   -------------------------------- */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* Photos start invisible and are faded in by GSAP once their pixels arrive
+   (components/gallery/shared.tsx → Img). */
+.g-img { opacity: 0; will-change: opacity; }
+
+/* Tile placeholder: a soft, slow sheen rather than a busy skeleton. */
+.g-tile, .g-ltile { background-color: #efe9f3; }
+.g-ph {
+  background: linear-gradient(100deg, #efe9f3 30%, #f7f3fa 50%, #efe9f3 70%);
+  background-size: 250% 100%;
+  animation: gSheen 1.6s ease-in-out infinite;
+}
+@keyframes gSheen { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+
+/* Timeline dots beside each moment (lit by ScrollTrigger). */
+.g-dot {
+  position: absolute;
+  left: 0;
+  top: 0.5rem;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid rgb(var(--lumina-200));
+  transition: background-color 0.4s var(--smooth), border-color 0.4s var(--smooth), box-shadow 0.4s var(--smooth), transform 0.4s var(--smooth);
+}
+.g-dot.is-on {
+  background: rgb(var(--lumina-500));
+  border-color: rgb(var(--lumina-500));
+  box-shadow: 0 0 0 5px rgb(var(--lumina-500) / 0.16);
+  transform: scale(1.1);
+}
+
+.g-ltile.is-selected { background-color: rgb(var(--lumina-100)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .g-img { opacity: 1; }
+  .g-ph { animation: none; }
+}
+
+/* --------------------------------
+   Tailwind (compiled at build time; see tailwind.config.js)
+   Kept last so utilities win over the rules above, exactly as they did
+   when the Play CDN injected them after this stylesheet.
+   -------------------------------- */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

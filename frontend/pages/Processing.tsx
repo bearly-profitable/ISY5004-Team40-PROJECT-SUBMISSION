@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Lumi, LumiPose, preloadPoses } from '../components/Lumi';
 import { AnalyzeResult, AnalyzeStatus, analysisStreamUrl, getAnalysisStatus } from '../lib/analysisApi';
+import { prefersReducedMotion } from '../lib/motion';
 import { Photo } from '../types';
 
 interface ProcessingProps {
@@ -39,6 +40,9 @@ const STEP_LUMI: Record<string, { pose: LumiPose; line: string }> = {
   finalizing: { pose: 'carry', line: 'Carrying it all to your gallery…' },
   done: { pose: 'celebrate', line: 'All done! Come and see!' },
 };
+/** Lumi's one animated loop, played through every working stage. */
+const WORKING_POSE: LumiPose = 'star';
+preloadPoses([WORKING_POSE], { animated: true });
 preloadPoses(Object.values(STEP_LUMI).map((s) => s.pose));
 
 export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onComplete, onError }) => {
@@ -102,7 +106,16 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
       source = new EventSource(analysisStreamUrl(jobId));
       source.onmessage = (event) => {
         try {
-          handleStatus(JSON.parse(event.data) as AnalyzeStatus);
+          const frame = JSON.parse(event.data) as AnalyzeStatus;
+          if (frame.status === 'completed' && !frame.result) {
+            // EventSource can't send credentials, so the stream never carries
+            // the result: fetch it with them.
+            source?.close();
+            source = null;
+            getAnalysisStatus(jobId).then(handleStatus).catch(() => startPolling());
+            return;
+          }
+          handleStatus(frame);
           if (finishedRef.current) source?.close();
         } catch { /* malformed frame — ignore */ }
       };
@@ -144,9 +157,17 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-10 flex flex-col items-center">
-      {/* Lumi narrates the pipeline, one pose per stage. */}
+      {/* Lumi narrates the pipeline, one line per stage. */}
       <div data-anim="pop" className="mb-5 flex justify-center">
-        <Lumi pose={lumi.pose} size={150} say={lumi.line} bubble="top" />
+        {/* While working Lumi plays its star loop and each stage keeps its own
+            line; with reduced motion each stage shows its own still pose. */}
+        <Lumi
+          pose={!done && !prefersReducedMotion() ? WORKING_POSE : lumi.pose}
+          size={150}
+          say={lumi.line}
+          bubble="top"
+          animate
+        />
       </div>
 
       {/* Percentage + label */}

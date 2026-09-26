@@ -11,15 +11,23 @@
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
+    "@remotion/media": "4.0.529",
+    "@remotion/player": "4.0.529",
+    "@remotion/transitions": "4.0.529",
+    "@remotion/web-renderer": "4.0.529",
     "@supabase/supabase-js": "^2.117.2",
     "gsap": "^3.15.0",
     "lucide-react": "^0.563.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "remotion": "4.0.529"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.17",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

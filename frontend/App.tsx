@@ -163,7 +163,18 @@ const App: React.FC = () => {
   }, []);
 
   const handleAnalysisComplete = (result: AnalyzeResult) => {
-    applyResult(result, galleryPhotoPool, analysisJobId);
+    // Grids read the backend's small thumbnails instead of decoding every
+    // multi-megabyte original; the local blob stays as the full-size source.
+    const pool = analysisJobId
+      ? galleryPhotoPool.map((p) => ({
+          ...p,
+          url: sessionPhotoUrl(analysisJobId, p.id, 400),
+          largeUrl: sessionPhotoUrl(analysisJobId, p.id, 800),
+          fullUrl: p.url,
+        }))
+      : galleryPhotoPool;
+    setGalleryPhotoPool(pool);
+    applyResult(result, pool, analysisJobId);
     setAnalysisError(null);
     setStep(AppStep.GALLERY);
   };
@@ -181,6 +192,7 @@ const App: React.FC = () => {
         id: p.id,
         // Grids get a cached 400px thumbnail; the lightbox loads the original
         url: sessionPhotoUrl(jobId, p.id, 400),
+        largeUrl: sessionPhotoUrl(jobId, p.id, 800),
         fullUrl: sessionPhotoUrl(jobId, p.id),
         name: p.name,
         size: '',

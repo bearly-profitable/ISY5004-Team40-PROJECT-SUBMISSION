@@ -7,13 +7,12 @@ export default defineConfig(({ mode }) => {
     return {
       server: {
         port: 3000,
-        host: '0.0.0.0',
+        // Localhost only: the dev server can read project files, so it should
+        // not be reachable from the rest of the Wi-Fi. To test on a phone, run
+        // with VITE_DEV_HOST=0.0.0.0 on a network you trust.
+        host: env.VITE_DEV_HOST || 'localhost',
       },
       plugins: [react()],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-      },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

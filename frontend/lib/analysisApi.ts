@@ -8,7 +8,7 @@ import type {
 } from '../types';
 import { supabase } from './supabase';
 
-const BACKEND_BASE_URL = (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? 'http://127.0.0.1:8000';
+const BACKEND_BASE_URL = ((import.meta.env.VITE_BACKEND_URL as string | undefined) || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) ?? '';
 
 /** Stable anonymous id for preference learning, persisted in localStorage. */
@@ -50,7 +50,7 @@ async function requireOk(response: Response, what: string): Promise<Response> {
 type AnalyzeEvent = {
   id: string;
   label: string;
-  autoLabel?: { label: string; confidence: number } | null;
+  autoLabel?: { label: string | null; confidence: number; source?: 'clip' | 'vision'; model?: string } | null;
   caption?: string | null;
   startTime?: number | null;
   endTime?: number | null;
@@ -230,8 +230,8 @@ export async function getSession(jobId: string): Promise<SessionDetail> {
 }
 
 /** URL that serves a stored photo straight from the backend job directory.
- *  Pass `width` (200 | 400 | 800) for a cached thumbnail instead of the original. */
-export function sessionPhotoUrl(jobId: string, photoId: string, width?: 200 | 400 | 800): string {
+ *  Pass `width` (200 | 400 | 800 | 1920) for a cached thumbnail instead of the original. */
+export function sessionPhotoUrl(jobId: string, photoId: string, width?: 200 | 400 | 800 | 1920): string {
   const base = `${BACKEND_BASE_URL}/api/photos/${jobId}/${encodeURIComponent(photoId)}`;
   return width ? `${base}?w=${width}` : base;
 }
@@ -463,6 +463,13 @@ export async function enhancePhoto(
 }
 
 /** `v` busts the browser cache after a re-enhance of the same photo. */
+/** Fetch a photo (session or enhanced) as a blob, with the API's auth headers. */
+export async function fetchMediaBlob(url: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(url, { headers: url.startsWith('blob:') ? undefined : await apiHeaders(), signal });
+  await requireOk(response, 'Load photo');
+  return response.blob();
+}
+
 export function enhancedPhotoUrl(jobId: string, photoId: string, v?: number): string {
   const base = `${BACKEND_BASE_URL}/api/enhanced/${jobId}/${encodeURIComponent(photoId)}`;
   return v ? `${base}?v=${v}` : base;

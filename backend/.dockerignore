@@ -7,3 +7,10 @@ jobs/
 venv/
 .env
 .git
+# Local data must never be baked into an image
+lumina.db*
+eval/eval_cache.db*
+images/
+outputs/
+*.log
+tests/

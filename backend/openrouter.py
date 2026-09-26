@@ -32,6 +32,9 @@ import httpx
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_IMAGE_MODEL = "openai/gpt-5.4-image-2"
 DEFAULT_TEXT_MODEL = "openai/gpt-5.6-luna"
+# Event titles: a cheap vision model is plenty for "look at 3 photos, name the
+# moment" — a whole session costs a fraction of a cent.
+DEFAULT_EVENT_MODEL = "openai/gpt-5.6-luna"
 
 # Models served only on the text-to-image `/images` endpoint. Using one of these
 # to "enhance" a photo would discard the photo, so enhancement refuses them
@@ -69,6 +72,11 @@ def image_model() -> str:
 
 def text_model() -> str:
     return (os.getenv("OPENROUTER_TEXT_MODEL") or DEFAULT_TEXT_MODEL).strip()
+
+
+def event_model() -> str:
+    """Vision model for event titles; set OPENROUTER_EVENT_MODEL=off to disable."""
+    return (os.getenv("OPENROUTER_EVENT_MODEL") or DEFAULT_EVENT_MODEL).strip()
 
 
 def can_edit_images(model: Optional[str] = None) -> bool:
@@ -281,3 +289,89 @@ def describe_images(
         if line.strip()
     ]
     return lines[: len(images)]
+
+
+def name_events(
+    events: list[dict],
+    scenes: list[str],
+    *,
+    model: Optional[str] = None,
+) -> list[Optional[dict]]:
+    """Titles for a session's events, in one vision call.
+
+    `events` is chronological; each is `{"images": [bytes, ...], "hint": str}`.
+    Returns one `{"title": str, "scene": str | None}` (or None) per event, where
+    `scene` is picked from `scenes` so Lumi's outfit still matches. Returns `[]`
+    on any failure — titles are a nicety and must never fail an analysis.
+    """
+    if not events:
+        return []
+
+    content: list[dict] = [{
+        "type": "text",
+        "text": (
+            f"These are {len(events)} events from one person's photo upload, in"
+            f" chronological order. Each event starts with a line of hints,"
+            f" followed by up to 3 of its photos."
+            f"\n\nGive each event the title a thoughtful friend would give that"
+            f" chapter of a photo album: 2 to 5 words, Title Case, specific to what"
+            f" you can actually see (the activity, setting, food, occasion, light)."
+            f"\nGood: Birthday Cake Candles, Sunset on the Beach, Hotpot Night,"
+            f" Morning Hike, Graduation Day Portraits, Mirror Selfies."
+            f"\nBad: Event 1, Group of People, Photos, Fun Times, Memories."
+            f"\nNever invent a person's name, a place name or a date you were not"
+            f" given. Every title must be different from the others."
+            f"\n\nAlso pick the one scene from this list that fits best, or null"
+            f" if none does: {', '.join(scenes)}."
+            f'\n\nReply with JSON only, no prose:'
+            f' {{"events": [{{"n": 1, "title": "...", "scene": "..."}}, ...]}}'
+        ),
+    }]
+    for n, event in enumerate(events, start=1):
+        content.append({"type": "text", "text": f"Event {n}: {event.get('hint') or 'no hints'}"})
+        for raw in event.get("images", [])[:3]:
+            try:
+                data_url, _ = prepare_image(raw, max_edge=512)
+            except Exception:
+                continue
+            content.append({"type": "image_url", "image_url": {"url": data_url}})
+
+    try:
+        data = _post("/chat/completions", {
+            "model": model or event_model(),
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 60 * len(events) + 200,
+            "response_format": {"type": "json_object"},
+        })
+        choices = data.get("choices") or []
+        text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+        parsed = _loose_json(text)
+    except (OpenRouterError, ValueError) as exc:
+        print(f"[Lumina] Event titles unavailable ({exc}).")
+        return []
+
+    scene_set = set(scenes)
+    out: list[Optional[dict]] = [None] * len(events)
+    for entry in (parsed.get("events") if isinstance(parsed, dict) else None) or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            idx = int(entry.get("n")) - 1
+        except (TypeError, ValueError):
+            continue
+        title = str(entry.get("title") or "").strip().strip('"').rstrip(".")
+        if not (0 <= idx < len(events)) or not title or len(title) > 48:
+            continue
+        scene = entry.get("scene")
+        out[idx] = {"title": title, "scene": scene if scene in scene_set else None}
+    return out
+
+
+def _loose_json(text: str):
+    """Parse a JSON object even when the model wraps it in a code fence."""
+    import json
+
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object in reply")
+    return json.loads(text[start:end + 1])

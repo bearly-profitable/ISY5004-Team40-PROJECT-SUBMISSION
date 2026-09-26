@@ -13,6 +13,7 @@ Owner ids:
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -24,6 +25,15 @@ from fastapi import HTTPException
 _CACHE_SECONDS = 300
 _cache: dict[str, tuple[str, float]] = {}
 _cache_lock = threading.Lock()
+
+# Anonymous ids are random strings minted by the browser (crypto.randomUUID).
+# The charset excludes ":", so nobody can pose as "user:<uuid>" without a
+# token that Supabase actually vouches for.
+_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def valid_client_id(client_id: Optional[str]) -> bool:
+    return bool(client_id) and bool(_CLIENT_ID_RE.match(client_id))
 
 
 def _config() -> tuple[str, str]:
@@ -62,7 +72,8 @@ def _verify(token: str) -> str:
             timeout=8.0,
         )
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"Could not reach Supabase Auth: {exc}") from exc
+        print(f"[Lumina] Supabase Auth unreachable: {exc}")
+        raise HTTPException(status_code=503, detail="Could not verify your login right now.") from exc
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Your login has expired. Please sign in again.")
     user_id = str(resp.json().get("id") or "")
@@ -91,6 +102,8 @@ def resolve_owner(
     cid = (client_id or "").strip()
     if not cid and not required:
         return None
-    if not cid or len(cid) > 128:
+    if not cid:
         raise HTTPException(status_code=400, detail="X-Client-Id header is required.")
+    if not valid_client_id(cid):
+        raise HTTPException(status_code=400, detail="Invalid X-Client-Id header.")
     return Owner(id=cid)

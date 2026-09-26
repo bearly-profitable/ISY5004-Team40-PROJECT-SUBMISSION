@@ -24,7 +24,8 @@ from transformers import AutoImageProcessor, AutoModel
 
 from blink import BlinkDetector, match_eyes_open
 from captioner import EventCaptioner
-from clip_search import ClipEngine
+from clip_search import EVENT_PROMPT_BANK, ClipEngine
+import openrouter
 from curation import (
     MMR_MODES,
     REJECT_EAR_CLOSED,
@@ -42,6 +43,17 @@ from curation import (
     mmr_select,
     reject_flags,
 )
+
+
+def _when_label(ts: Optional[float]) -> Optional[str]:
+    """A readable name for an event from its start time: "Sat 14 Jun · Evening"."""
+    if ts is None:
+        return None
+    import datetime as _dt
+    dt = _dt.datetime.fromtimestamp(ts)
+    part = ("Night" if dt.hour < 5 else "Morning" if dt.hour < 12
+            else "Afternoon" if dt.hour < 17 else "Evening" if dt.hour < 21 else "Night")
+    return f"{dt.strftime('%a')} {dt.day} {dt.strftime('%b')} · {part}"
 
 SEED = 42
 random.seed(SEED)
@@ -1036,6 +1048,68 @@ class LuminaPipeline:
             "face_size_ratio": float(max(r.get("face_size_ratio", 0) for r in recs)),
         }
 
+    @staticmethod
+    def _title_events(events: list[dict], samples: Dict[str, list]) -> None:
+        """Give every event a human title, in place.
+
+        A vision model (OpenRouter, one call per session) looks at each event's
+        best shots and names it — "Sunset on the Beach", not "Event 2". Without
+        a key, or if the call fails, the CLIP scene label stands, and events
+        CLIP could not place are named by when they happened.
+        """
+        model = openrouter.event_model()
+        if events and openrouter.is_configured() and model.lower() not in ("", "off", "none"):
+            requests = []
+            for evt in events:
+                hints = []
+                if evt.get("startTime") is not None:
+                    import datetime as _dt
+                    start = _dt.datetime.fromtimestamp(evt["startTime"])
+                    hints.append(f"taken {start.strftime('%A %d %B %Y, around %I %p').replace(' 0', ' ')}")
+                if evt.get("autoLabel"):
+                    hints.append(f"a classifier guessed '{evt['autoLabel']['label']}'")
+                if evt.get("caption"):
+                    hints.append(f"one photo was captioned '{evt['caption']}'")
+                hints.append(f"{len(evt['photoIds'])} photos")
+                images = []
+                for img_bgr in samples.get(evt["id"], []):
+                    ok, buf = cv2.imencode(".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    if ok:
+                        images.append(buf.tobytes())
+                requests.append({"images": images, "hint": "; ".join(hints)})
+
+            titles = openrouter.name_events(requests, [label for label, _ in EVENT_PROMPT_BANK], model=model)
+            for evt, named in zip(events, titles):
+                if not named:
+                    continue
+                # The title comes from the vision model; autoLabel keeps a scene
+                # word so Lumi's outfit and the search chips still work.
+                clip_label = evt.get("autoLabel") or {}
+                evt["label"] = named["title"]
+                evt["autoLabel"] = {
+                    "label": named["scene"] or clip_label.get("label"),
+                    "confidence": clip_label.get("confidence", 1.0),
+                    "source": "vision",
+                    "model": model,
+                }
+
+        # Fallback: name untitled events by when they happened
+        undated = 0
+        for evt in (e for e in events if not e["label"]):
+            evt["label"] = _when_label(evt.get("startTime"))
+            if not evt["label"]:
+                undated += 1
+                evt["label"] = f"Moment {undated}"
+
+        # Two events can land on the same name ("Beach" twice): tell them apart
+        seen: Dict[str, int] = {}
+        for evt in events:
+            key = evt["label"].lower()
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] > 1:
+                when = _when_label(evt.get("startTime"))
+                evt["label"] = f"{evt['label']} · {when}" if when else f"{evt['label']} {seen[key]}"
+
     def _score_event_group(
         self,
         event_photo_paths: list[Path],
@@ -1542,6 +1616,7 @@ class LuminaPipeline:
                 person_photo_to_faces.setdefault((rec["person_id"], str(rec["photo_path"])), []).append(rec)
 
         events_payload: list[dict] = []
+        title_samples: Dict[str, list] = {}  # event id -> a few BGR shots for the titler
         total_events = max(1, len(event_groups))
 
         for evt_idx, (evt_label, evt_paths) in enumerate(sorted(event_groups.items())):
@@ -1571,9 +1646,7 @@ class LuminaPipeline:
                     except Exception:
                         auto_label = None
 
-            label = f"Event {evt_idx + 1}"
-            if auto_label is not None:
-                label = auto_label["label"]
+            label = auto_label["label"] if auto_label is not None else None
 
             # EXIF time span of the event (None when no member has EXIF)
             evt_ts = [exif_times.get(str(p)) for p in evt_paths]
@@ -1595,6 +1668,14 @@ class LuminaPipeline:
                     caption = self.captioner.caption(
                         Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
                     )
+
+            # A varied handful of shots for the vision titler below
+            sample_ids = (mmr_picks or {}).get("diverse") or [m["photoId"] for m in members]
+            id_to_path = {path_to_photo_id.get(str(p)): str(p) for p in evt_paths}
+            title_samples[f"event_{evt_idx}"] = [
+                img_cache[id_to_path[pid]] for pid in sample_ids[:3]
+                if pid in id_to_path and id_to_path[pid] in img_cache
+            ]
 
             events_payload.append({
                 "id": f"event_{evt_idx}",
@@ -1620,11 +1701,11 @@ class LuminaPipeline:
         # ── Chronological order: dated events first (oldest → newest),
         #     undated ones keep their relative order at the end ──────────────
         events_payload.sort(key=lambda e: (e["startTime"] is None, e["startTime"] or 0))
-        generic_n = 0
-        for evt in events_payload:
-            if evt["autoLabel"] is None:
-                generic_n += 1
-                evt["label"] = f"Event {generic_n}"
+        t0 = time.time()
+        if callback:
+            callback("quality_scoring", "Naming your events", 93)
+        self._title_events(events_payload, title_samples)
+        timings["event_titles"] = time.time() - t0
 
         # ── Build identities payload (prominent people only) ────────────────
         identity_map: Dict[str, Dict] = {}
