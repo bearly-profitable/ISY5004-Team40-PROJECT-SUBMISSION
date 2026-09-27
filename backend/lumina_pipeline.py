@@ -1833,3 +1833,161 @@ class LuminaPipeline:
         if callback:
             callback("completed", "Analysis complete", 100)
         return result
+
+    def run_quick(
+        self,
+        image_paths: list[Path],
+        photo_ids: list[str],
+        callback: ProgressCallback | None = None,
+    ) -> dict:
+        """"Analysis off": describe each photo, and nothing else.
+
+        No faces, people, scoring, best shots, duplicate checks or grouping
+        into moments. Each photo gets one CLIP pass, which yields its scene
+        label ("context") and makes it searchable by text. Photos come back as
+        one collection in capture-time order, in the same result shape as
+        run(), so the gallery, sessions and search all keep working.
+        """
+        if len(image_paths) == 0:
+            raise ValueError("No images were provided.")
+        if len(image_paths) != len(photo_ids):
+            raise ValueError("photo_ids must have same length as image_paths.")
+
+        t_start = time.time()
+        timings: Dict[str, float] = {}
+        total = len(image_paths)
+        path_to_photo_id = {str(p): pid for p, pid in zip(image_paths, photo_ids)}
+
+        if callback:
+            callback("loading_models", "Loading your photos", 2)
+        self._load_models()
+
+        t0 = time.time()
+        img_cache, content_hashes, exif_times = self._build_image_cache(image_paths, callback=callback)
+        timings["image_load"] = time.time() - t0
+
+        # A full analysis may already have embedded these photos. Quick runs
+        # only read that cache: a CLIP-only entry would hide the face and
+        # person features a later full analysis needs.
+        clip_by_path: Dict[str, np.ndarray] = {}
+        if self.store is not None:
+            for path in image_paths:
+                digest = content_hashes.get(str(path))
+                hit = self.store.cache_get(self._cache_key(digest)) if digest else None
+                if hit is not None and hit.get("clip") is not None:
+                    clip_by_path[str(path)] = np.asarray(hit["clip"], dtype=np.float32)
+        cache_hits = len(clip_by_path)
+
+        t0 = time.time()
+        todo = [p for p in image_paths if str(p) not in clip_by_path and str(p) in img_cache]
+        done = cache_hits
+        if callback:
+            callback("describing", "Reading what is in each photo", 10,
+                     {"imagesDone": done, "imagesTotal": total})
+        if self.clip is not None:
+            step = max(1, self.cfg.clip_batch_size)
+            for start in range(0, len(todo), step):
+                batch = todo[start:start + step]
+                embs = self._extract_clip_embeddings(batch, img_cache)
+                for path, emb in zip(batch, embs):
+                    clip_by_path[str(path)] = emb
+                done += len(batch)
+                if callback:
+                    callback("describing", "Reading what is in each photo", 10 + int(80 * done / total),
+                             {"imagesDone": done, "imagesTotal": total})
+        timings["clip"] = time.time() - t0
+
+        # Per-photo context: the closest scene in the prompt bank, if any is
+        # close enough to trust.
+        context: Dict[str, Optional[dict]] = {}
+        if self.clip is not None:
+            for path_str, emb in clip_by_path.items():
+                try:
+                    context[path_str] = self.clip.name_event(np.asarray(emb, dtype=np.float32)[None, :])
+                except Exception:
+                    context[path_str] = None
+
+        if callback:
+            callback("finalizing", "Laying out your photos", 95)
+
+        # Capture-time order; photos without EXIF keep their upload order, last.
+        order = sorted(
+            range(total),
+            key=lambda i: (exif_times.get(str(image_paths[i])) is None,
+                           exif_times.get(str(image_paths[i])) or 0, i),
+        )
+        ordered_paths = [image_paths[i] for i in order if str(image_paths[i]) in img_cache]
+        if not ordered_paths:
+            raise ValueError("None of the photos could be read.")
+
+        members = []
+        for path in ordered_paths:
+            ctx = context.get(str(path))
+            members.append({
+                "photoId": path_to_photo_id[str(path)],
+                # No scoring in this mode; zeros keep the result shape uniform.
+                "finalScore": 0.0, "centrality": 0.0, "faceSharpness": 0.0, "faceSize": 0.0,
+                "detScore": 0.0, "poseQuality": 0.0, "ear": 0.0, "nimaScore": 0.0,
+                "context": ctx["label"] if ctx else None,
+            })
+
+        stamps = [exif_times.get(str(p)) for p in ordered_paths]
+        stamps = [t for t in stamps if t is not None]
+        start_time = min(stamps) if stamps else None
+        end_time = max(stamps) if stamps else None
+        date_label = None
+        if start_time is not None:
+            import datetime as _dt
+            date_label = _dt.datetime.fromtimestamp(start_time).strftime("%a %d %b %Y")
+
+        overall = None
+        if self.clip is not None and clip_by_path:
+            try:
+                overall = self.clip.name_event(np.stack([np.asarray(e, dtype=np.float32) for e in clip_by_path.values()]))
+            except Exception:
+                overall = None
+
+        event = {
+            "id": "event_0",
+            "label": "Your photos",
+            "autoLabel": overall,
+            "caption": None,
+            "startTime": start_time,
+            "endTime": end_time,
+            "dateLabel": date_label,
+            "photoIds": [m["photoId"] for m in members],
+            # A cover for listings, not a pick: nothing is ranked in this mode.
+            "topPhotoId": members[0]["photoId"],
+            "persons": [],
+            "members": members,
+            "bestByPerson": [],
+            "mmrPicks": {},
+        }
+
+        timings["total"] = time.time() - t_start
+        result = {
+            "summary": {
+                "mode": "quick",
+                "numPhotos": total,
+                "numEvents": 1,
+                "numIdentities": 0,
+                "embeddingModel": "openai/clip-vit-base-patch32" if self.clip is not None else "none",
+                "clipModel": "openai/clip-vit-base-patch32" if self.clip is not None else None,
+                "cacheHits": cache_hits,
+                "cacheMisses": len(todo),
+                "timings": {k: round(v, 2) for k, v in timings.items()},
+            },
+            "events": [event],
+            "identities": [],
+        }
+
+        search_ids = [path_to_photo_id[p] for p in clip_by_path]
+        if search_ids:
+            result["_clipIndex"] = {
+                "photoIds": search_ids,
+                "matrix": np.stack([np.asarray(e, dtype=np.float32) for e in clip_by_path.values()]),
+            }
+
+        if callback:
+            callback("completed", "Done", 100)
+        return result

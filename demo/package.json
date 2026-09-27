@@ -1,0 +1,29 @@
+{
+  "name": "lumina-demo-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "capture": "node capture/record.mjs",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts LuminaDemo out/lumina-demo.mp4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "playwright": "1.55",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.529",
+    "@remotion/cli": "^4.0.529",
+    "@remotion/google-fonts": "^4.0.529",
+    "@remotion/light-leaks": "^4.0.529",
+    "@remotion/media": "^4.0.529",
+    "@remotion/motion-blur": "^4.0.529",
+    "@remotion/noise": "^4.0.529",
+    "@remotion/renderer": "^4.0.529",
+    "@remotion/transitions": "^4.0.529",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.529"
+  }
+}

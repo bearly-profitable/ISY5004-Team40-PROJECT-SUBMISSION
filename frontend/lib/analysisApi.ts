@@ -1,4 +1,5 @@
 import type {
+  AnalysisMode,
   Explanation,
   NormSignals,
   Photo,
@@ -75,6 +76,7 @@ type AnalyzeEvent = {
     explanation?: Explanation;
     flags?: Array<'duplicate' | 'blurry' | 'eyes_closed' | 'low_quality'>;
     duplicateOf?: string;
+    context?: string | null;
   }>;
   bestByPerson?: Array<{
     personId: string;
@@ -98,6 +100,7 @@ type AnalyzeIdentity = {
 
 export type AnalyzeResult = {
   summary: {
+    mode?: AnalysisMode;
     numPhotos: number;
     numEvents: number;
     numIdentities: number;
@@ -137,18 +140,28 @@ type AnalyzeStartResponse = {
   jobId: string;
 };
 
-async function photoToFile(photo: Photo, index: number): Promise<File> {
+export type UploadProgress = { loaded: number; total: number };
+
+/** The bytes to upload: the picked File when we still have it, else the URL's contents. */
+async function photoPayload(photo: Photo): Promise<Blob> {
+  if (photo.file) return photo.file;
   const response = await fetch(photo.url);
   if (!response.ok) {
     throw new Error(`Failed to load photo payload for ${photo.name}.`);
   }
-  const blob = await response.blob();
-  const fallbackName = `photo-${index}.jpg`;
-  const name = photo.name?.trim() ? photo.name : fallbackName;
-  return new File([blob], name, { type: blob.type || 'image/jpeg' });
+  return response.blob();
 }
 
-export async function startAnalysis(photos: Photo[]): Promise<string> {
+/** Upload the photos and queue an analysis; resolves with the job id.
+ *  Uses XHR because fetch() can't report upload progress. */
+export async function startAnalysis(
+  photos: Photo[],
+  { onProgress, signal, mode = 'full' }: {
+    onProgress?: (progress: UploadProgress) => void;
+    signal?: AbortSignal;
+    mode?: AnalysisMode;
+  } = {},
+): Promise<string> {
   if (photos.length === 0) {
     throw new Error('No photos selected for analysis.');
   }
@@ -160,19 +173,41 @@ export async function startAnalysis(photos: Photo[]): Promise<string> {
     size: photo.size,
   }));
 
-  const files = await Promise.all(photos.map((photo, idx) => photoToFile(photo, idx)));
-  files.forEach((file) => form.append('files', file));
-  form.append('photoMeta', JSON.stringify(meta));
-
-  const response = await fetch(`${BACKEND_BASE_URL}/api/analyze`, {
-    method: 'POST',
-    headers: await apiHeaders(),
-    body: form,
+  const payloads = await Promise.all(photos.map(photoPayload));
+  payloads.forEach((blob, idx) => {
+    const name = photos[idx].name?.trim() || `photo-${idx}.jpg`;
+    form.append('files', blob, name);
   });
-  await requireOk(response, 'Start analysis');
+  form.append('photoMeta', JSON.stringify(meta));
+  form.append('mode', mode);
 
-  const payload = await response.json() as AnalyzeStartResponse;
-  return payload.jobId;
+  const headers = await apiHeaders();
+  if (signal?.aborted) throw new DOMException('Upload cancelled.', 'AbortError');
+
+  return new Promise<string>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BACKEND_BASE_URL}/api/analyze`);
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.({ loaded: event.loaded, total: event.total });
+    };
+    xhr.onload = () => {
+      let body: (Partial<AnalyzeStartResponse> & { detail?: unknown }) | null = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch { /* not JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300 && body?.jobId) {
+        resolve(body.jobId);
+        return;
+      }
+      const detail = typeof body?.detail === 'string' ? body.detail : '';
+      reject(new Error(`Start analysis failed (${xhr.status})${detail ? `: ${detail}` : ''}`));
+    };
+    xhr.onerror = () => reject(new Error('Uploading the photos failed. Check your connection and try again.'));
+    xhr.onabort = () => reject(new DOMException('Upload cancelled.', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
+    xhr.send(form);
+  });
 }
 
 export async function getAnalysisStatus(jobId: string): Promise<AnalyzeStatus> {

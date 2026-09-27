@@ -380,7 +380,9 @@ const HeroButton: React.FC<{ label: string; onClick: () => void; children: React
 /* ------------------------------------------------
    The timeline of moments
    ------------------------------------------------ */
-export const MomentsView: React.FC<Omit<MomentCardProps, 'event' | 'index'> & { events: Event[]; onClearFilters?: () => void }> = ({
+// Memoised: the gallery re-renders for lightbox steps, toasts and enhance
+// progress, and every moment card used to re-render with it.
+export const MomentsView = React.memo<Omit<MomentCardProps, 'event' | 'index'> & { events: Event[]; onClearFilters?: () => void }>(({
   events, onClearFilters, ...cardProps
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
@@ -442,4 +444,4 @@ export const MomentsView: React.FC<Omit<MomentCardProps, 'event' | 'index'> & { 
       </div>
     </div>
   );
-};
+});

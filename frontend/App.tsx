@@ -9,10 +9,19 @@ import { Sessions } from './pages/Sessions';
 import { Profile } from './pages/Profile';
 import { Navbar } from './components/Navbar';
 import { MEMBER_STEPS, SignInGate } from './components/SignInGate';
-import { AppStep, Event, Identity, Photo } from './types';
-import { AnalyzeResult, getSession, sessionPhotoUrl, startAnalysis } from './lib/analysisApi';
+import { AnalysisMode, AppStep, Event, Identity, Photo } from './types';
+import { AnalyzeResult, UploadProgress, getSession, sessionPhotoUrl, startAnalysis } from './lib/analysisApi';
+import { makeThumbnails } from './lib/localThumbs';
 import { startMotion } from './lib/motion';
 import { useAuth } from './lib/auth';
+
+/** Free the in-memory copies (originals and thumbnails) of local photos. */
+function revokeLocalUrls(photos: Photo[]): void {
+  for (const photo of photos) {
+    if (photo.url.startsWith('blob:')) URL.revokeObjectURL(photo.url);
+    if (photo.thumbUrl?.startsWith('blob:') && photo.thumbUrl !== photo.url) URL.revokeObjectURL(photo.thumbUrl);
+  }
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -78,8 +87,15 @@ const App: React.FC = () => {
   const [galleryPhotoPool, setGalleryPhotoPool] = useState<Photo[]>([]);
   const [analysisJobId, setAnalysisJobId] = useState<string | null>(null);
   const [galleryJobId, setGalleryJobId] = useState<string | null>(null);
+  // The running job's mode, and the mode of the session in the gallery.
+  const [processingMode, setProcessingMode] = useState<AnalysisMode>('full');
+  const [galleryMode, setGalleryMode] = useState<AnalysisMode>('full');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
+  // Set while the selected photos are uploading (the Processing page shows it).
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const uploadRef = useRef<AbortController | null>(null);
+  // What was picked when an upload or analysis failed, so a retry is one click.
+  const [retrySelection, setRetrySelection] = useState<string[] | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [galleryEvents, setGalleryEvents] = useState<Event[]>([]);
   const [galleryIdentities, setGalleryIdentities] = useState<Identity[]>([]);
@@ -114,10 +130,12 @@ const App: React.FC = () => {
   const prevUserId = useRef<string | null>(null);
   useEffect(() => {
     if (prevUserId.current && !userId) {
-      for (const photo of photosRef.current) {
-        if (photo.url.startsWith('blob:')) URL.revokeObjectURL(photo.url);
-      }
+      uploadRef.current?.abort();
+      uploadRef.current = null;
+      thumbGenRef.current += 1;
+      revokeLocalUrls(photosRef.current);
       setPhotos([]);
+      setUploadProgress(null);
       setGalleryPhotoPool([]);
       setGalleryEvents([]);
       setGalleryIdentities([]);
@@ -141,46 +159,70 @@ const App: React.FC = () => {
   // failed to load in the gallery (infinite skeleton).
   const photosRef = useRef<Photo[]>(photos);
   useEffect(() => { photosRef.current = photos; }, [photos]);
-  useEffect(() => {
-    return () => {
-      for (const photo of photosRef.current) {
-        if (photo.url.startsWith('blob:')) {
-          URL.revokeObjectURL(photo.url);
-        }
-      }
-    };
+  useEffect(() => () => revokeLocalUrls(photosRef.current), []);
+
+  // Thumbnails arrive one by one; they're applied in batches so thirty photos
+  // don't mean thirty re-renders of every grid.
+  const thumbGenRef = useRef(0);
+  const pendingThumbs = useRef(new Map<string, string | null>());
+  const thumbFlush = useRef<number | null>(null);
+  const flushThumbs = useCallback(() => {
+    thumbFlush.current = null;
+    const ready = new Map(pendingThumbs.current);
+    pendingThumbs.current.clear();
+    if (ready.size === 0) return;
+    const apply = (list: Photo[]) => (list.some((p) => ready.has(p.id) && !p.thumbUrl)
+      // No thumbnail possible (e.g. HEIC): the grid shows the original instead.
+      ? list.map((p) => (ready.has(p.id) && !p.thumbUrl ? { ...p, thumbUrl: ready.get(p.id) ?? p.url } : p))
+      : list);
+    setPhotos(apply);
+    setGalleryPhotoPool(apply);
   }, []);
 
   const handleLocalUpload = (files: FileList) => {
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'));
     if (imageFiles.length === 0) return;
 
-    setPhotos((prev) => {
-      const remaining = MAX_PHOTOS - prev.length;
-      const toAdd = imageFiles.slice(0, remaining);
-
-      if (imageFiles.length > remaining && remaining > 0) {
-        setAnalysisError(`Only ${remaining} more photos can be added (max ${MAX_PHOTOS}). ${imageFiles.length - remaining} were skipped.`);
-      } else if (remaining <= 0) {
-        setAnalysisError(`Photo limit reached (max ${MAX_PHOTOS}). Remove some photos first.`);
-        return prev;
-      }
-
-      const newPhotos: Photo[] = toAdd.map((file) => ({
-        id: crypto.randomUUID(),
-        url: URL.createObjectURL(file),
-        name: file.name,
-        size: formatFileSize(file.size),
-        source: 'local' as const,
-      }));
-
-      return [...prev, ...newPhotos];
-    });
-
+    // Built out here, not inside a setPhotos updater: React may run an
+    // updater later (or twice), and each run would mint new blob URLs.
+    const remaining = MAX_PHOTOS - photosRef.current.length;
+    if (remaining <= 0) {
+      setAnalysisError(`Photo limit reached (max ${MAX_PHOTOS}). Remove some photos first.`);
+      return;
+    }
+    if (imageFiles.length > remaining) {
+      setAnalysisError(`Only ${remaining} more photos can be added (max ${MAX_PHOTOS}). ${imageFiles.length - remaining} were skipped.`);
+    }
+    const added: Photo[] = imageFiles.slice(0, remaining).map((file) => ({
+      id: crypto.randomUUID(),
+      url: URL.createObjectURL(file),
+      name: file.name,
+      size: formatFileSize(file.size),
+      source: 'local' as const,
+      file,
+    }));
+    photosRef.current = [...photosRef.current, ...added];
+    setPhotos((prev) => [...prev, ...added]);
     setStep(AppStep.UPLOAD);
+
+    const gen = thumbGenRef.current;
+    void makeThumbnails(
+      added.map((p) => ({ id: p.id, file: p.file as File })),
+      (id, url) => {
+        if (gen !== thumbGenRef.current) {
+          if (url) URL.revokeObjectURL(url); // signed out meanwhile
+          return;
+        }
+        pendingThumbs.current.set(id, url);
+        if (thumbFlush.current === null) thumbFlush.current = window.setTimeout(flushThumbs, 120);
+      },
+    );
   };
 
-  const handleAnalyze = async (selectedPhotoIds: string[]) => {
+  /** Go straight to the Processing page and upload from there, so a big
+   *  batch shows progress instead of freezing the Upload page until every
+   *  original has reached the server. */
+  const handleAnalyze = (selectedPhotoIds: string[], mode: AnalysisMode = 'full') => {
     const photoSet = new Set(selectedPhotoIds);
     const selectedPhotos = photos.filter((photo) => photoSet.has(photo.id));
     if (selectedPhotos.length === 0) {
@@ -188,20 +230,39 @@ const App: React.FC = () => {
       return;
     }
 
-    setIsStartingAnalysis(true);
+    uploadRef.current?.abort();
+    const upload = new AbortController();
+    uploadRef.current = upload;
+    const current = () => uploadRef.current === upload;
+
     setAnalysisError(null);
-    try {
-      const jobId = await startAnalysis(selectedPhotos);
-      setGalleryPhotoPool(selectedPhotos);
-      setEnhancedPhotoIds([]);
-      setAnalysisJobId(jobId);
-      setStep(AppStep.PROCESSING);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to start analysis.';
-      setAnalysisError(message);
-    } finally {
-      setIsStartingAnalysis(false);
-    }
+    setRetrySelection(null);
+    setGalleryPhotoPool(selectedPhotos);
+    setEnhancedPhotoIds([]);
+    setAnalysisJobId(null);
+    setUploadProgress({ loaded: 0, total: 0 });
+    setProcessingMode(mode);
+    setStep(AppStep.PROCESSING);
+
+    startAnalysis(selectedPhotos, {
+      mode,
+      signal: upload.signal,
+      onProgress: (progress) => { if (current()) setUploadProgress(progress); },
+    })
+      .then((jobId) => {
+        if (current()) setAnalysisJobId(jobId);
+      })
+      .catch((error) => {
+        if (!current()) return;
+        setAnalysisError(error instanceof Error ? error.message : 'Failed to start analysis.');
+        setRetrySelection(selectedPhotoIds);
+        setStep((s) => (s === AppStep.PROCESSING ? AppStep.UPLOAD : s));
+      })
+      .finally(() => {
+        if (!current()) return;
+        uploadRef.current = null;
+        setUploadProgress(null);
+      });
   };
 
   const applyResult = useCallback((result: AnalyzeResult, pool: Photo[], jobId: string | null) => {
@@ -209,6 +270,7 @@ const App: React.FC = () => {
     setGalleryEvents(mapped.events);
     setGalleryIdentities(mapped.identities);
     setGalleryJobId(jobId);
+    setGalleryMode(result.summary?.mode === 'quick' ? 'quick' : 'full');
   }, []);
 
   const handleAnalysisComplete = (result: AnalyzeResult) => {
@@ -275,19 +337,20 @@ const App: React.FC = () => {
             onAnalyze={handleAnalyze}
             photos={photos}
             onLocalUpload={handleLocalUpload}
-            isAnalyzing={isStartingAnalysis}
+            isAnalyzing={uploadProgress !== null}
             analyzeError={analysisError}
+            initialSelected={retrySelection}
             maxPhotos={MAX_PHOTOS}
           />
         );
       case AppStep.PROCESSING:
-        if (!analysisJobId) {
+        if (!analysisJobId && !uploadProgress) {
           return (
             <UploadView
               onAnalyze={handleAnalyze}
               photos={photos}
               onLocalUpload={handleLocalUpload}
-              isAnalyzing={isStartingAnalysis}
+              isAnalyzing={uploadProgress !== null}
               analyzeError={analysisError ?? 'No analysis job was found. Please start again.'}
               maxPhotos={MAX_PHOTOS}
             />
@@ -296,10 +359,13 @@ const App: React.FC = () => {
         return (
           <Processing
             jobId={analysisJobId}
+            mode={processingMode}
+            upload={uploadProgress}
             photos={galleryPhotoPool}
             onComplete={handleAnalysisComplete}
             onError={(message) => {
               setAnalysisError(message);
+              setRetrySelection(galleryPhotoPool.map((p) => p.id));
               setStep(AppStep.UPLOAD);
             }}
           />
@@ -308,6 +374,7 @@ const App: React.FC = () => {
         return (
           <SmartGallery
             jobId={galleryJobId}
+            mode={galleryMode}
             events={galleryEvents}
             identities={galleryIdentities}
             onGoToPhotos={() => setStep(AppStep.UPLOAD)}

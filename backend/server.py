@@ -29,6 +29,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import Headers, MutableHeaders
 
 import collage as collage_mod
 import mascot
@@ -101,7 +103,7 @@ model_lock = threading.Lock()
 
 # Single-worker queue: the ML models are shared, non-thread-safe objects, so
 # analysis jobs run strictly one at a time.
-job_queue: "queue.Queue[tuple[str, list[Path], list[str]]]" = queue.Queue()
+job_queue: "queue.Queue[tuple[str, list[Path], list[str], str]]" = queue.Queue()
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +124,11 @@ def update_job(job_id: str, persist: bool = False, **fields: Any) -> None:
         store.update_job(job_id, **db_fields)
 
 
-def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str]) -> None:
+def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str], mode: str = "full") -> None:
+    # Grid thumbnails are built alongside the analysis, so the gallery's first
+    # paint finds them ready instead of resizing dozens on demand.
+    thumbs = threading.Thread(target=prewarm_thumbs, args=(job_id,), daemon=True)
+    thumbs.start()
     try:
         update_job(job_id, persist=True, status="running", stepKey="loading_models",
                    stepLabel="Loading models", progress=1)
@@ -140,8 +146,10 @@ def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str]) -> None:
                     fields["imagesTotal"] = int(meta["imagesTotal"])
             update_job(job_id, **fields)
 
+        # "quick" is Analysis off: a CLIP pass per photo, no curation.
+        run = pipeline.run_quick if mode == "quick" else pipeline.run
         with model_lock:
-            result = pipeline.run(image_paths=image_paths, photo_ids=photo_ids, callback=callback)
+            result = run(image_paths=image_paths, photo_ids=photo_ids, callback=callback)
 
         # CLIP index is server-side state for /api/search, not client payload.
         clip_index = result.pop("_clipIndex", None)
@@ -151,6 +159,7 @@ def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str]) -> None:
             except Exception:
                 pass
 
+        thumbs.join()
         update_job(
             job_id,
             persist=True,
@@ -160,7 +169,6 @@ def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str]) -> None:
             progress=100,
             result=result,
         )
-        threading.Thread(target=prewarm_thumbs, args=(job_id,), daemon=True).start()
     except Exception:
         # The traceback stays in the server log; the client gets no internals.
         print(f"[Lumina] Job {job_id} failed:\n{traceback.format_exc()}")
@@ -176,9 +184,9 @@ def run_job(job_id: str, image_paths: list[Path], photo_ids: list[str]) -> None:
 
 def worker_loop() -> None:
     while True:
-        job_id, image_paths, photo_ids = job_queue.get()
+        job_id, image_paths, photo_ids, mode = job_queue.get()
         try:
-            run_job(job_id, image_paths, photo_ids)
+            run_job(job_id, image_paths, photo_ids, mode)
         finally:
             job_queue.task_done()
 
@@ -309,38 +317,55 @@ if not DEV_MODE:
     _PAGE_SECURITY_HEADERS["Strict-Transport-Security"] = "max-age=31536000"
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    """Refuse oversized bodies up front, and harden every response."""
-    length = request.headers.get("content-length")
-    if length and length.isdigit() and int(length) > MAX_REQUEST_MB * 1024 * 1024:
-        return Response(
-            content=json.dumps({"detail": f"Request too large (max {MAX_REQUEST_MB:.0f} MB)."}),
-            status_code=413,
-            media_type="application/json",
-        )
-    response = await call_next(request)
-    path = request.url.path
-    is_page = STATIC_DIR is not None and not path.startswith("/api") and path not in ("/docs", "/redoc", "/openapi.json")
-    for name, value in (_PAGE_SECURITY_HEADERS if is_page else _SECURITY_HEADERS).items():
-        # Swagger UI (opt-in) needs its own scripts and styles.
-        if name == "Content-Security-Policy" and path in ("/docs", "/redoc"):
-            continue
-        response.headers.setdefault(name, value)
-    if is_page and response.status_code == 200 and "cache-control" not in response.headers:
-        # Vite's hashed bundles never change; everything else must revalidate
-        # so a deploy is picked up.
-        response.headers["Cache-Control"] = (
-            "public, max-age=31536000, immutable" if path.startswith("/assets/") else "no-cache"
-        )
-    if (response.headers.get("content-type", "").startswith("application/json")
-            and "cache-control" not in response.headers):
-        response.headers["Cache-Control"] = "no-store"  # sessions are personal
-    return response
+def _json_error(status: int, detail: str) -> Response:
+    return Response(content=json.dumps({"detail": detail}), status_code=status, media_type="application/json")
 
 
-@app.middleware("http")
-async def api_key_guard(request: Request, call_next):
+class SecurityHeadersMiddleware:
+    """Refuse oversized bodies up front, and harden every response.
+
+    Plain ASGI rather than ``@app.middleware("http")``: BaseHTTPMiddleware
+    relays every request-body chunk through an extra stream, and with two of
+    them a 30-photo upload took about twice as long to receive.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        length = Headers(scope=scope).get("content-length")
+        if length and length.isdigit() and int(length) > MAX_REQUEST_MB * 1024 * 1024:
+            await _json_error(413, f"Request too large (max {MAX_REQUEST_MB:.0f} MB).")(scope, receive, send)
+            return
+        path = scope["path"]
+        is_page = STATIC_DIR is not None and not path.startswith("/api") and path not in ("/docs", "/redoc", "/openapi.json")
+
+        async def send_hardened(message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in (_PAGE_SECURITY_HEADERS if is_page else _SECURITY_HEADERS).items():
+                    # Swagger UI (opt-in) needs its own scripts and styles.
+                    if name == "Content-Security-Policy" and path in ("/docs", "/redoc"):
+                        continue
+                    headers.setdefault(name, value)
+                if is_page and message["status"] == 200 and "cache-control" not in headers:
+                    # Vite's hashed bundles never change; everything else must revalidate
+                    # so a deploy is picked up.
+                    headers["Cache-Control"] = (
+                        "public, max-age=31536000, immutable" if path.startswith("/assets/") else "no-cache"
+                    )
+                if (headers.get("content-type", "").startswith("application/json")
+                        and "cache-control" not in headers):
+                    headers["Cache-Control"] = "no-store"  # sessions are personal
+            await send(message)
+
+        await self.app(scope, receive, send_hardened)
+
+
+class ApiKeyGuardMiddleware:
     """Optional shared-secret auth for public deployments.
 
     Enabled by setting LUMINA_API_KEY on the backend (and VITE_API_KEY on the
@@ -348,22 +373,32 @@ async def api_key_guard(request: Request, call_next):
     /api/photos is exempt because <img> tags cannot send headers — the
     unguessable job UUID in the path acts as the bearer token there.
     """
-    open_paths = ("/api/health", "/api/photos/")
-    is_sse = request.url.path.startswith("/api/analyze/") and request.url.path.endswith("/stream")
-    if (
-        API_KEY
-        and request.url.path.startswith("/api")
-        and not request.url.path.startswith(open_paths)
-        and not is_sse  # EventSource cannot send headers; job UUID is the bearer
-    ):
-        supplied = request.headers.get("x-api-key", "")
-        if request.method != "OPTIONS" and not hmac.compare_digest(supplied.encode(), API_KEY.encode()):
-            return Response(
-                content=json.dumps({"detail": "Invalid or missing API key."}),
-                status_code=401,
-                media_type="application/json",
-            )
-    return await call_next(request)
+
+    _OPEN_PATHS = ("/api/health", "/api/photos/")
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and API_KEY:
+            path = scope["path"]
+            is_sse = path.startswith("/api/analyze/") and path.endswith("/stream")
+            if (
+                path.startswith("/api")
+                and not path.startswith(self._OPEN_PATHS)
+                and not is_sse  # EventSource cannot send headers; job UUID is the bearer
+                and scope["method"] != "OPTIONS"
+            ):
+                supplied = Headers(scope=scope).get("x-api-key", "")
+                if not hmac.compare_digest(supplied.encode(), API_KEY.encode()):
+                    await _json_error(401, "Invalid or missing API key.")(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+# Added last = runs first: the key check, then security headers, then CORS.
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(ApiKeyGuardMiddleware)
 
 
 def safe_filename(name: str) -> str:
@@ -478,19 +513,52 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _save_uploads(
+    files: list[UploadFile], meta: list, input_dir: Path,
+) -> tuple[list[Path], list[str], dict[str, str]]:
+    """Verify and store each upload; returns paths, photo ids and the photo map."""
+    image_paths: list[Path] = []
+    photo_ids: list[str] = []
+    photo_map: dict[str, str] = {}  # photoId -> {file, name}
+    for idx, upload in enumerate(files):
+        row = meta[idx] if isinstance(meta[idx], dict) else {}
+        photo_id = str(row.get("id", "")).strip()
+        if not photo_id or len(photo_id) > 128:
+            raise HTTPException(status_code=400, detail=f"Missing or invalid photo id at index {idx}.")
+        if photo_id in photo_map:
+            raise HTTPException(status_code=400, detail=f"Duplicate photo id at index {idx}.")
+        original_name = str(row.get("name") or upload.filename or f"image_{idx}.jpg")[:255]
+
+        upload.file.seek(0)
+        payload = upload.file.read(int(MAX_UPLOAD_MB * 1024 * 1024) + 1)
+        ext = _read_image_upload(payload, original_name)
+        final_name = f"{idx:04d}_{safe_filename(photo_id)}{ext}"
+        save_path = input_dir / final_name
+        save_path.write_bytes(payload)
+
+        image_paths.append(save_path)
+        photo_ids.append(photo_id)
+        photo_map[photo_id] = json.dumps({"file": final_name, "name": original_name})
+    return image_paths, photo_ids, photo_map
+
+
 @app.post("/api/analyze", response_model=AnalyzeJobResponse)
 async def analyze(
     files: list[UploadFile] = File(...),
     photoMeta: str = Form(...),
+    mode: str = Form(default="full"),
     authorization: Optional[str] = Header(default=None),
     x_client_id: Optional[str] = Header(default=None),
 ) -> AnalyzeJobResponse:
     # Every session has an owner; ownerless ones would be listed to everybody.
-    owner_id = _owner(authorization, x_client_id).id
+    # Verifying a login can call Supabase, so it runs off the event loop.
+    owner_id = (await run_in_threadpool(_owner, authorization, x_client_id)).id
     if not files:
         raise HTTPException(status_code=400, detail="At least one image is required.")
     if len(files) > MAX_PHOTOS:
         raise HTTPException(status_code=400, detail=f"At most {MAX_PHOTOS} photos per analysis.")
+    if mode not in ("full", "quick"):
+        raise HTTPException(status_code=400, detail="mode must be 'full' or 'quick'.")
 
     try:
         meta = json.loads(photoMeta)
@@ -508,29 +576,10 @@ async def analyze(
     input_dir = JOBS_DIR / job_id / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
 
-    image_paths: list[Path] = []
-    photo_ids: list[str] = []
-    photo_map: dict[str, str] = {}  # photoId -> {file, name}
-
     try:
-        for idx, upload in enumerate(files):
-            row = meta[idx] if isinstance(meta[idx], dict) else {}
-            photo_id = str(row.get("id", "")).strip()
-            if not photo_id or len(photo_id) > 128:
-                raise HTTPException(status_code=400, detail=f"Missing or invalid photo id at index {idx}.")
-            if photo_id in photo_map:
-                raise HTTPException(status_code=400, detail=f"Duplicate photo id at index {idx}.")
-            original_name = str(row.get("name") or upload.filename or f"image_{idx}.jpg")[:255]
-
-            payload = await upload.read(int(MAX_UPLOAD_MB * 1024 * 1024) + 1)
-            ext = _read_image_upload(payload, original_name)
-            final_name = f"{idx:04d}_{safe_filename(photo_id)}{ext}"
-            save_path = input_dir / final_name
-            save_path.write_bytes(payload)
-
-            image_paths.append(save_path)
-            photo_ids.append(photo_id)
-            photo_map[photo_id] = json.dumps({"file": final_name, "name": original_name})
+        # Decoding checks and disk writes are blocking; keep them off the
+        # event loop so progress streams and thumbnails stay responsive.
+        image_paths, photo_ids, photo_map = await run_in_threadpool(_save_uploads, files, meta, input_dir)
     except HTTPException:
         shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
         raise
@@ -547,7 +596,7 @@ async def analyze(
             "error": None,
         }
 
-    job_queue.put((job_id, image_paths, photo_ids))
+    job_queue.put((job_id, image_paths, photo_ids, mode))
     return AnalyzeJobResponse(jobId=job_id)
 
 
@@ -1609,7 +1658,7 @@ async def face_analysis(
     authorization: Optional[str] = Header(default=None),
     x_client_id: Optional[str] = Header(default=None),
 ) -> FaceAnalysisJobResponse:
-    owner = _owner(authorization, x_client_id)
+    owner = await run_in_threadpool(_owner, authorization, x_client_id)
     if not file.filename:
         raise HTTPException(status_code=400, detail="An image file is required.")
     rate_limiter.check(f"face:{owner.id}", RATE_FACE_PER_MINUTE, 60)

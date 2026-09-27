@@ -1,6 +1,17 @@
 import React, { useLayoutEffect, useRef } from 'react';
 import { gsap, ScrollTrigger, prefersReducedMotion } from '../../lib/motion';
 
+// ScrollTrigger.refresh() re-measures every trigger on the page, so the many
+// grids that ask for one in the same frame share a single refresh.
+let refreshFrame = 0;
+function scheduleRefresh(): void {
+  if (refreshFrame) return;
+  refreshFrame = requestAnimationFrame(() => {
+    refreshFrame = 0;
+    ScrollTrigger.refresh();
+  });
+}
+
 /**
  * Reveal the elements matching `selector` inside `rootRef` as they scroll in.
  *
@@ -47,11 +58,7 @@ export function useReveal(
       batchMax: 14,
     });
 
-    let raf = 0;
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => ScrollTrigger.refresh());
-    });
+    const observer = new ResizeObserver(scheduleRefresh);
     observer.observe(root);
 
     const failsafe = window.setTimeout(() => {
@@ -60,7 +67,6 @@ export function useReveal(
 
     return () => {
       window.clearTimeout(failsafe);
-      cancelAnimationFrame(raf);
       observer.disconnect();
       triggers.forEach((t) => t.kill());
       // Anything still waiting goes back to its natural, visible state.

@@ -9,6 +9,10 @@ export interface Photo {
   name: string;
   size: string;
   source?: 'local' | 'session';
+  /** The picked file itself, uploaded as-is without re-reading the blob URL. */
+  file?: File;
+  /** Small in-browser thumbnail of a local photo, for grids. */
+  thumbUrl?: string;
 }
 
 export interface Cluster {
@@ -58,6 +62,8 @@ export interface EventMember {
   explanation?: Explanation;
   flags?: RejectFlag[];
   duplicateOf?: string;
+  /** Scene label from a quick ("Analysis off") run. */
+  context?: string | null;
 }
 
 export interface BestByPerson {
@@ -110,11 +116,15 @@ export interface Identity {
   faceBoxes?: Record<string, FaceBox>;
 }
 
+/** "full" curates (people, best shots, moments); "quick" only describes each photo. */
+export type AnalysisMode = 'full' | 'quick';
+
 export interface SessionSummary {
   jobId: string;
   createdAt: number;
   numPhotos: number;
   summary?: {
+    mode?: AnalysisMode;
     numPhotos: number;
     numEvents: number;
     numIdentities: number;

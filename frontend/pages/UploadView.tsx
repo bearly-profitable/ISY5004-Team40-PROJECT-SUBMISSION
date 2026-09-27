@@ -1,15 +1,84 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { Photo } from '../types';
-import { Search, Play, Check, ImageIcon, Upload, Plus } from 'lucide-react';
+import React, { memo, useState, useRef, useCallback, useMemo } from 'react';
+import { AnalysisMode, Photo } from '../types';
+import { Search, Play, Check, ImageIcon, Upload, Plus, Sparkles } from 'lucide-react';
 import { GlassCarousel } from '../components/GlassCarousel';
 import { Lumi } from '../components/Lumi';
 
+const MODE_KEY = 'lumina-analysis-mode';
+
+function readMode(): AnalysisMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'quick' ? 'quick' : 'full';
+  } catch {
+    return 'full';
+  }
+}
+
+interface PhotoTileProps {
+  photo: Photo;
+  index: number;
+  selected: boolean;
+  onToggle: (id: string) => void;
+}
+
+/** One pickable photo. Memoised so a tap re-renders one tile, not the grid. */
+const PhotoTile = memo(function PhotoTile({ photo, index, selected, onToggle }: PhotoTileProps) {
+  const [loaded, setLoaded] = useState(false);
+  // Wait for the small thumbnail rather than decoding the full original.
+  const src = photo.source === 'local' ? photo.thumbUrl : photo.thumbUrl ?? photo.url;
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(photo.id)}
+      aria-pressed={selected}
+      aria-label={`${selected ? 'Deselect' : 'Select'} ${photo.name}`}
+      data-anim="pop"
+      data-delay={Math.min(index, 30) * 18}
+      className={`group relative aspect-square rounded-2xl cursor-pointer transition-transform duration-200 ${
+        selected
+          ? 'ring-[3px] ring-lumina-500 ring-offset-2 ring-offset-[#f6eef4] scale-[0.95]'
+          : 'hover:scale-[0.97]'
+      }`}
+    >
+      <div className="absolute inset-0 rounded-2xl overflow-hidden">
+        {!loaded && <div className="absolute inset-0 skeleton" />}
+        {src && <img
+          src={src}
+          alt=""
+          className={`w-full h-full object-cover transition-all duration-300 ${
+            loaded ? '' : 'opacity-0'
+          } ${selected ? 'brightness-105' : 'brightness-95 group-hover:brightness-100'}`}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+        />}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900/60 to-transparent px-2 pt-4 pb-1.5 text-left">
+          <span className="text-[10px] text-white font-bold block truncate leading-tight">{photo.name}</span>
+        </div>
+      </div>
+      <div className="absolute top-1.5 right-1.5 z-10">
+        <div
+          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
+            selected
+              ? 'bg-lumina-500 border-white scale-100'
+              : 'border-white/80 bg-slate-900/20 backdrop-blur-sm scale-90 group-hover:scale-100'
+          }`}
+        >
+          {selected && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
+        </div>
+      </div>
+    </button>
+  );
+});
+
 interface UploadViewProps {
-  onAnalyze: (selectedPhotoIds: string[]) => void | Promise<void>;
+  onAnalyze: (selectedPhotoIds: string[], mode: AnalysisMode) => void | Promise<void>;
   photos: Photo[];
   onLocalUpload?: (files: FileList) => void;
   isAnalyzing?: boolean;
   analyzeError?: string | null;
+  /** Pre-picked photos, e.g. the batch whose upload just failed. */
+  initialSelected?: string[] | null;
   maxPhotos: number;
 }
 
@@ -19,25 +88,31 @@ export const UploadView: React.FC<UploadViewProps> = ({
   onLocalUpload,
   isAnalyzing = false,
   analyzeError = null,
+  initialSelected = null,
   maxPhotos,
 }) => {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(initialSelected ?? []));
   const [filter, setFilter] = useState('');
   const [dragOver, setDragOver] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState<Set<string>>(new Set());
+  // Analysis on: people, best shots and moments. Off: just note what's in
+  // each photo, which is much quicker. Remembered per browser.
+  const [mode, setModeState] = useState<AnalysisMode>(readMode);
+  const analysisOn = mode === 'full';
+  const toggleMode = () => {
+    const next: AnalysisMode = analysisOn ? 'quick' : 'full';
+    setModeState(next);
+    try { localStorage.setItem(MODE_KEY, next); } catch { /* per-viewer nicety only */ }
+  };
+  const start = () => onAnalyze(Array.from(selected), mode);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const markLoaded = useCallback((id: string) => {
-    setImageLoaded((prev) => new Set(prev).add(id));
-  }, []);
-
-  const toggle = (id: string) => {
+  const toggle = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-  };
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -67,17 +142,19 @@ export const UploadView: React.FC<UploadViewProps> = ({
     e.target.value = '';
   };
 
-  const filtered = photos.filter((p) =>
-    p.name.toLowerCase().includes(filter.toLowerCase()),
-  );
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? photos.filter((p) => p.name.toLowerCase().includes(q)) : photos;
+  }, [photos, filter]);
   const allSelected = filtered.length > 0 && filtered.every((p) => selected.has(p.id));
   const selectAll = () => {
     setSelected(allSelected ? new Set() : new Set(filtered.map((p) => p.id)));
   };
-  const featured = filtered.slice(0, 5).map((p) => ({
+  // Memoised: a fresh array every render would restart the carousel.
+  const featured = useMemo(() => filtered.slice(0, 5).map((p) => ({
     url: p.url,
     label: `${p.name} — ${p.size}`,
-  }));
+  })), [filtered]);
 
   const fileInput = (
     <input
@@ -133,9 +210,12 @@ export const UploadView: React.FC<UploadViewProps> = ({
     ? 'On it! Starting now…'
     : selected.size === 0
     ? 'Tap the photos you want me to look at.'
+    : !analysisOn
+    ? 'Quick mode: I’ll just note what’s in each photo.'
     : selected.size === 1
     ? 'Just one? Pick a few more and I can compare!'
     : `${selected.size} photos. Let’s go!`;
+  const action = analysisOn ? 'Analyze' : 'Submit';
 
   return (
     <div
@@ -173,12 +253,29 @@ export const UploadView: React.FC<UploadViewProps> = ({
             {allSelected ? 'Clear' : 'Select all'}
           </button>
           <button
-            onClick={() => onAnalyze(Array.from(selected))}
+            type="button"
+            onClick={toggleMode}
+            role="switch"
+            aria-checked={analysisOn}
+            disabled={isAnalyzing}
+            className="btn-soft !py-2 !pl-3 !pr-3.5 text-sm gap-2"
+            title={analysisOn
+              ? 'On: Lumi finds the people, picks the best shots and groups moments'
+              : 'Off: Lumi only notes what is in each photo. Much quicker, nothing is ranked'}
+          >
+            <span className={`relative w-8 h-[18px] rounded-full transition-colors duration-300 ${analysisOn ? 'bg-lumina-500' : 'bg-slate-300'}`}>
+              <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-[left] duration-300 ${analysisOn ? 'left-4' : 'left-[2px]'}`} />
+            </span>
+            <Sparkles className="w-3.5 h-3.5" />
+            Analysis {analysisOn ? 'on' : 'off'}
+          </button>
+          <button
+            onClick={start}
             disabled={selected.size === 0 || isAnalyzing}
             className="btn-jelly btn-jelly-sm hidden lg:inline-flex"
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            {isAnalyzing ? 'Starting…' : 'Analyze'}
+            {analysisOn ? <Play className="w-3.5 h-3.5 fill-current" /> : <Upload className="w-3.5 h-3.5" />}
+            {isAnalyzing ? 'Starting…' : action}
           </button>
         </div>
       </div>
@@ -230,53 +327,15 @@ export const UploadView: React.FC<UploadViewProps> = ({
           ) : (
             <div className="lg:overflow-y-auto lg:max-h-[calc(100svh-15rem)] lg:pr-1">
               <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-2.5">
-                {filtered.map((photo, i) => {
-                  const isSelected = selected.has(photo.id);
-                  const loaded = imageLoaded.has(photo.id);
-                  return (
-                    <button
-                      type="button"
-                      key={photo.id}
-                      onClick={() => toggle(photo.id)}
-                      aria-pressed={isSelected}
-                      aria-label={`${isSelected ? 'Deselect' : 'Select'} ${photo.name}`}
-                      data-anim="pop"
-                      data-delay={Math.min(i, 30) * 18}
-                      className={`group relative aspect-square rounded-2xl cursor-pointer transition-transform duration-200 ${
-                        isSelected
-                          ? 'ring-[3px] ring-lumina-500 ring-offset-2 ring-offset-[#f6eef4] scale-[0.95]'
-                          : 'hover:scale-[0.97]'
-                      }`}
-                    >
-                      <div className="absolute inset-0 rounded-2xl overflow-hidden">
-                        {!loaded && <div className="absolute inset-0 skeleton" />}
-                        <img
-                          src={photo.url}
-                          alt=""
-                          className={`w-full h-full object-cover transition-all duration-300 ${
-                            loaded ? '' : 'opacity-0'
-                          } ${isSelected ? 'brightness-105' : 'brightness-95 group-hover:brightness-100'}`}
-                          loading="lazy"
-                          onLoad={() => markLoaded(photo.id)}
-                        />
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900/60 to-transparent px-2 pt-4 pb-1.5 text-left">
-                          <span className="text-[10px] text-white font-bold block truncate leading-tight">{photo.name}</span>
-                        </div>
-                      </div>
-                      <div className="absolute top-1.5 right-1.5 z-10">
-                        <div
-                          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
-                            isSelected
-                              ? 'bg-lumina-500 border-white scale-100'
-                              : 'border-white/80 bg-slate-900/20 backdrop-blur-sm scale-90 group-hover:scale-100'
-                          }`}
-                        >
-                          {isSelected && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
+                {filtered.map((photo, i) => (
+                  <PhotoTile
+                    key={photo.id}
+                    photo={photo}
+                    index={i}
+                    selected={selected.has(photo.id)}
+                    onToggle={toggle}
+                  />
+                ))}
               </div>
             </div>
           )}
@@ -286,14 +345,16 @@ export const UploadView: React.FC<UploadViewProps> = ({
       {/* Phones and tablets: the main action lives at the bottom, within thumb reach. */}
       <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 bg-gradient-to-t from-[#f6eef4] via-[#f6eef4]/90 to-transparent">
         <button
-          onClick={() => onAnalyze(Array.from(selected))}
+          onClick={start}
           disabled={selected.size === 0 || isAnalyzing}
           className="btn-jelly w-full py-4 text-base"
         >
-          <Play className="w-4 h-4 fill-current" />
+          {analysisOn ? <Play className="w-4 h-4 fill-current" /> : <Upload className="w-4 h-4" />}
           {isAnalyzing
             ? 'Starting…'
-            : selected.size === 0 ? 'Pick photos to analyze' : `Analyze ${selected.size} photo${selected.size === 1 ? '' : 's'}`}
+            : selected.size === 0
+              ? `Pick photos to ${action.toLowerCase()}`
+              : `${action} ${selected.size} photo${selected.size === 1 ? '' : 's'}`}
         </button>
       </div>
     </div>

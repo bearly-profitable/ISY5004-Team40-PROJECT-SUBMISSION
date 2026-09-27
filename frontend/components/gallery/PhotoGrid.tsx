@@ -212,13 +212,15 @@ export const PhotoGrid: React.FC<{
 /* ------------------------------------------------
    All photos — every shot, or each moment's best
    ------------------------------------------------ */
-export const AllPhotosView: React.FC<{
+// Memoised views: the gallery re-renders for lightbox steps, toasts and
+// enhance progress, none of which change what these grids show.
+export const AllPhotosView = React.memo<{
   events: Event[];
   person: Identity | null;
   highlightPerson: Identity | null;
   onOpenItems: (items: LightboxItem[], index: number) => void;
   onMakeBest: (eventId: string, photoId: string) => void;
-}> = ({ events, person, highlightPerson, onOpenItems, onMakeBest }) => {
+}>(({ events, person, highlightPerson, onOpenItems, onMakeBest }) => {
   const [mode, setMode] = useState<'all' | 'best'>('best');
 
   const flat = useMemo(() => {
@@ -283,19 +285,19 @@ export const AllPhotosView: React.FC<{
       />
     </div>
   );
-};
+});
 
 /* ------------------------------------------------
    Cleanup — what Lumina thinks you can delete
    ------------------------------------------------ */
 const FLAG_ORDER: RejectFlag[] = ['duplicate', 'eyes_closed', 'blurry', 'low_quality'];
 
-export const CleanupView: React.FC<{
+export const CleanupView = React.memo<{
   rejects: Array<{ photo: Photo; member: EventMember; event: Event }>;
   onOpenItems: (items: LightboxItem[], index: number) => void;
   /** Deletes photos for good; absent when the session is not saved. */
   onDelete?: (photoIds: string[]) => Promise<void>;
-}> = ({ rejects, onOpenItems, onDelete }) => {
+}>(({ rejects, onOpenItems, onDelete }) => {
   const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set());
   const remove = async (photoIds: string[]) => {
     if (!onDelete) return;
@@ -377,4 +379,4 @@ export const CleanupView: React.FC<{
       </div>
     </div>
   );
-};
+});

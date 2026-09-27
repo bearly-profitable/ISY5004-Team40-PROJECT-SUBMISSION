@@ -21,6 +21,12 @@ const NAV_ITEMS = [
   { label: 'Sessions', step: AppStep.SESSIONS },
 ];
 
+/** Pages without a tab of their own light up the tab they belong to. */
+const TAB_FOR_STEP: Partial<Record<AppStep, AppStep>> = {
+  [AppStep.PROCESSING]: AppStep.UPLOAD,
+  [AppStep.FACE_ANALYSIS]: AppStep.GALLERY,
+};
+
 export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep, onLogIn }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
@@ -32,6 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep, onLogIn })
   const signedOut = !loading && !user;
   // A members-only page is showing Lumi's gate: make the button Lumi means glow.
   const beckoning = signedOut && MEMBER_STEPS.has(currentStep);
+  const activeTab = TAB_FOR_STEP[currentStep] ?? currentStep;
   const hidden = useRef(false);
   const lastY = useRef(0);
 
@@ -57,21 +64,25 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep, onLogIn })
     return () => window.removeEventListener('scroll', onScroll);
   }, [currentStep]);
 
-  // Slide the active-tab blob under whichever tab is current.
+  // Slide the active-tab blob under whichever tab is current, and keep it
+  // there when the tabs change width (the web font arriving, the lock icons
+  // coming and going with sign-in), which used to leave it misaligned.
   useLayoutEffect(() => {
     const pills = pillsRef.current;
     const blob = indicatorRef.current;
     if (!pills || !blob) return;
-    const active = pills.querySelector<HTMLElement>('[aria-current="page"]');
-    if (!active) { gsap.set(blob, { opacity: 0 }); return; }
-    gsap.to(blob, {
-      x: active.offsetLeft,
-      width: active.offsetWidth,
-      opacity: 1,
-      duration: prefersReducedMotion() ? 0 : 0.5,
-      ease: 'elastic.out(1, 0.75)',
-    });
-  }, [currentStep]);
+    const place = (animate: boolean) => {
+      const active = pills.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!active) { gsap.set(blob, { opacity: 0 }); return; }
+      const vars = { x: active.offsetLeft, width: active.offsetWidth, opacity: 1 };
+      if (!animate || prefersReducedMotion()) gsap.set(blob, vars);
+      else gsap.to(blob, { ...vars, duration: 0.5, ease: 'elastic.out(1, 0.75)', overwrite: true });
+    };
+    place(true);
+    const observer = new ResizeObserver(() => place(false));
+    pills.querySelectorAll('button').forEach((b) => observer.observe(b));
+    return () => observer.disconnect();
+  }, [activeTab, signedOut]);
 
   useEffect(() => {
     if (!mobileOpen || !sheetRef.current || prefersReducedMotion()) return;
@@ -101,7 +112,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep, onLogIn })
               className="absolute left-0 top-1 bottom-1 rounded-full bg-white shadow-[0_2px_0_rgba(143,123,198,0.25),0_6px_16px_rgba(80,50,110,0.1)] opacity-0"
             />
             {NAV_ITEMS.map((item) => {
-              const active = currentStep === item.step;
+              const active = activeTab === item.step;
               return (
                 <button
                   key={item.label}
@@ -171,9 +182,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentStep, setStep, onLogIn })
                 key={item.label}
                 data-item
                 onClick={() => go(item.step)}
-                aria-current={currentStep === item.step ? 'page' : undefined}
+                aria-current={activeTab === item.step ? 'page' : undefined}
                 className={`w-full text-left px-4 py-3.5 rounded-2xl text-base font-extrabold flex items-center justify-between ${
-                  currentStep === item.step ? 'bg-white text-lumina-700' : 'text-slate-600'
+                  activeTab === item.step ? 'bg-white text-lumina-700' : 'text-slate-600'
                 }`}
               >
                 {item.label}

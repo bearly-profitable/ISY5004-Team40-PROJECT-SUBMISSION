@@ -1,7 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, CalendarDays, Check, Clock, History, ImageIcon, Loader2, LogIn, Pencil, RefreshCw, Star, Trash2, Users,
+  AlertTriangle, CalendarDays, Check, Clock, History, ImageIcon, Loader2, LogIn, Pencil, RefreshCw, Star, Trash2, Users, Zap,
 } from 'lucide-react';
 import { SessionSummary } from '../types';
 import { deleteSession, listSessions, sessionPhotoUrl } from '../lib/analysisApi';
@@ -174,7 +174,13 @@ const SessionCard: React.FC<SessionCardProps> = ({ session, index, onOpen, onDel
             <ImageIcon className="w-3.5 h-3.5 text-lumina-400" />
             {session.numPhotos} photos
           </span>
-          {s && (
+          {s?.mode === 'quick' && (
+            <span className="flex items-center gap-1.5" title="Uploaded with Analysis off: nothing ranked or grouped">
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              Quick look
+            </span>
+          )}
+          {s && s.mode !== 'quick' && (
             <>
               <span className="flex items-center gap-1.5">
                 <CalendarDays className="w-3.5 h-3.5 text-indigo-400" />

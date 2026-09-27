@@ -3,7 +3,7 @@ import {
   ArrowLeft, Clapperboard, Download, FileText, Images, LayoutGrid, Loader2, Pencil, ScanFace, SlidersHorizontal,
   Sparkles, Trash2, TreePalm, UploadCloud, Users,
 } from 'lucide-react';
-import type { Event, EventMember, Identity, Photo } from '../types';
+import type { AnalysisMode, Event, EventMember, Identity, Photo } from '../types';
 import type { LightboxItem } from '../components/Lightbox';
 import { Lightbox } from '../components/Lightbox';
 import { Lumi } from '../components/Lumi';
@@ -24,6 +24,7 @@ import { AllPhotosView, CleanupView, PhotoGrid, keeperIds } from '../components/
 import { SearchBar, type SearchHits } from '../components/gallery/SearchBar';
 import { PeopleManager, PersonalizationPanel } from '../components/gallery/panels';
 import { AlbumModal, type AlbumChoices } from '../components/gallery/AlbumModal';
+import { QuickView } from '../components/gallery/QuickView';
 
 // Remotion (preview + in-browser encoder) is only downloaded when a video is made.
 const VideoModal = lazy(() => import('../components/gallery/VideoModal').then((m) => ({ default: m.VideoModal })));
@@ -48,7 +49,7 @@ function readView(): View {
 }
 
 /** A session's keepers, described for the library. */
-function librarySyncItems(events: Event[], identities: Identity[]): LibrarySyncItem[] {
+function librarySyncItems(events: Event[], identities: Identity[], quick = false): LibrarySyncItem[] {
   const peopleByPhoto = new Map<string, string[]>();
   for (const person of identities) {
     for (const photoId of person.photoIds) {
@@ -71,7 +72,7 @@ function librarySyncItems(events: Event[], identities: Identity[]): LibrarySyncI
         eventLabel: evt.label,
         people: peopleByPhoto.get(photo.id) ?? [],
         score: members.get(photo.id)?.finalScore ?? null,
-        isBest: photo.id === evt.topPhotoId,
+        isBest: !quick && photo.id === evt.topPhotoId, // a quick look picks nothing
       });
     }
   }
@@ -80,6 +81,8 @@ function librarySyncItems(events: Event[], identities: Identity[]): LibrarySyncI
 
 interface SmartGalleryProps {
   jobId: string | null;
+  /** "quick": the session was made with Analysis off, so nothing is ranked. */
+  mode?: AnalysisMode;
   events: Event[];
   identities: Identity[];
   onGoToPhotos?: () => void;
@@ -90,6 +93,7 @@ interface SmartGalleryProps {
 
 export const SmartGallery: React.FC<SmartGalleryProps> = ({
   jobId,
+  mode = 'full',
   events: initialEvents,
   identities: initialIdentities,
   onGoToPhotos,
@@ -103,6 +107,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   enhanceStyleRef.current = profile?.enhance_style ?? 'natural';
 
   const hasSession = initialEvents.length > 0;
+  const quick = mode === 'quick';
   const [view, setViewState] = useState<View>(readView);
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
@@ -167,7 +172,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     const key = `${user.id}:${jobId}`;
     if (syncedSessions.has(key)) return;
     syncedSessions.add(key);
-    syncToLibrary(user.id, jobId, librarySyncItems(initialEvents, initialIdentities))
+    syncToLibrary(user.id, jobId, librarySyncItems(initialEvents, initialIdentities, quick))
       .catch(() => { syncedSessions.delete(key); });
   }, [user?.id, jobId, initialEvents, initialIdentities]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -213,6 +218,9 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
   const filteredEvents = useMemo(() => events
     .filter((e) => !selectedPerson || e.persons.includes(selectedPerson))
     .filter((e) => !selectedEvent || e.id === selectedEvent), [events, selectedPerson, selectedEvent]);
+
+  const contextOf = (photoId: string): string | undefined =>
+    eventByPhotoId.get(photoId)?.members.find((m) => m.photoId === photoId)?.context ?? undefined;
 
   const eventsForStrip = selectedPerson ? events.filter((e) => e.persons.includes(selectedPerson)) : events;
   const totalPhotos = events.reduce((n, e) => n + e.photos.length, 0);
@@ -263,8 +271,12 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     }
   }, [jobId, onResultUpdate, notify]);
 
+  // Read through a ref so this callback stays stable and the memoised views
+  // don't re-render every time the events change identity.
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
   const handleMakeBest = useCallback(async (eventId: string, photoId: string) => {
-    const event = events.find((e) => e.id === eventId);
+    const event = eventsRef.current.find((e) => e.id === eventId);
     if (!event) return;
     const previousBest = event.topPhotoId;
     setEvents((prev) => prev.map((e) => (e.id === eventId ? { ...e, topPhotoId: photoId, userPinned: true } : e)));
@@ -275,7 +287,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not record feedback.', 'error');
     }
-  }, [events, jobId, notify]);
+  }, [jobId, notify]);
 
   const handleDeletePhotos = useCallback(async (photoIds: string[]) => {
     if (!jobId) { notify('Deleting requires a saved session.', 'error'); return; }
@@ -449,8 +461,8 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
     { key: 'cleanup', label: 'Cleanup', icon: <Trash2 className="w-4 h-4 hidden sm:block" />, badge: rejects.length },
   ];
 
-  const showFilters = hasSession && !search && (view === 'moments' || view === 'all');
-  const clearFilters = () => { setSelectedPerson(null); setSelectedEvent(null); };
+  const showFilters = hasSession && !quick && !search && (view === 'moments' || view === 'all');
+  const clearFilters = useCallback(() => { setSelectedPerson(null); setSelectedEvent(null); }, []);
 
   const renderContent = () => {
     if (!hasSession) {
@@ -486,17 +498,20 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             <PhotoGrid
               entries={search.results.map((r, i) => ({
                 photo: r.photo,
-                event: eventByPhotoId.get(r.photo.id) ?? null,
-                caption: eventByPhotoId.get(r.photo.id)?.label,
-                isBest: i === 0 && search.results.length > 1,
+                event: quick ? null : eventByPhotoId.get(r.photo.id) ?? null,
+                caption: quick ? contextOf(r.photo.id) : eventByPhotoId.get(r.photo.id)?.label,
+                isBest: !quick && i === 0 && search.results.length > 1,
               }))}
               eagerCount={12}
-              onOpen={(i) => openLightbox(search.results.map((r) => ({ photo: r.photo, event: eventByPhotoId.get(r.photo.id) ?? null })), i)}
+              onOpen={(i) => openLightbox(search.results.map((r) => (quick
+                ? { photo: r.photo, subtitle: contextOf(r.photo.id) }
+                : { photo: r.photo, event: eventByPhotoId.get(r.photo.id) ?? null })), i)}
             />
           )}
         </div>
       );
     }
+    if (quick) return <QuickView events={events} onOpenItems={openLightbox} />;
     switch (view) {
       case 'cleanup':
         return <CleanupView rejects={rejects} onOpenItems={openLightbox} onDelete={jobId ? handleDeletePhotos : undefined} />;
@@ -536,13 +551,20 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             <Lumi pose="star" size={84} animate className="hidden sm:block shrink-0 -mb-1" />
             <div className="min-w-0">
               <p className="text-sm font-bold text-lumina-500 mb-1.5" data-anim="fade-up">
-                {hasSession ? 'Curated by Lumi' : 'Nothing here yet'}
+                {!hasSession ? 'Nothing here yet' : quick ? 'A quick look by Lumi' : 'Curated by Lumi'}
               </p>
               <SplitTitle
                 text="Your gallery"
                 className="font-display text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight text-slate-900 leading-[1.02]"
               />
-              {hasSession && (
+              {hasSession && quick && (
+                <p className="text-[15px] text-slate-500 mt-3" data-anim="fade-up" data-delay="250">
+                  <CountUp value={totalPhotos} className="font-bold text-slate-800" /> photos
+                  <span className="mx-2 text-slate-300">/</span>
+                  Analysis off
+                </p>
+              )}
+              {hasSession && !quick && (
                 <p className="text-[15px] text-slate-500 mt-3" data-anim="fade-up" data-delay="250">
                   <CountUp value={events.length} className="font-bold text-slate-800" /> {events.length === 1 ? 'moment' : 'moments'}
                   <span className="mx-2 text-slate-300">/</span>
@@ -554,7 +576,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
             </div>
           </div>
 
-          {hasSession && jobId && view === 'moments' ? (
+          {hasSession && jobId && view === 'moments' && !quick ? (
             <div className="flex items-center gap-2 flex-wrap" data-anim="fade-up" data-delay="300">
               <button
                 onClick={(e) => {
@@ -585,7 +607,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
                 <Clapperboard className="w-4 h-4" /> Create video
               </button>
             </div>
-          ) : hasSession && view === 'all' ? (
+          ) : hasSession && (view === 'all' || quick) ? (
             <button
               onClick={() => setWorldOpen(true)}
               className="btn-jelly btn-jelly-sm !h-10 self-start lg:self-auto"
@@ -614,7 +636,7 @@ export const SmartGallery: React.FC<SmartGalleryProps> = ({
           ref={toolbarRef}
           className="relative z-30 py-2 mb-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
         >
-          {hasSession && <Segmented items={tabs} value={view} onChange={setView} className="self-start max-w-full" />}
+          {hasSession && !quick && <Segmented items={tabs} value={view} onChange={setView} className="self-start max-w-full" />}
           {hasSession && jobId && (
             <SearchBar
               jobId={jobId}

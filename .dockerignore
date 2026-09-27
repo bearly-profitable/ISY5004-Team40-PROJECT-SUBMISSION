@@ -18,6 +18,8 @@ Final*/
 Latex format/
 supabase/
 tools/
+demo/
+testing_images/
 
 # Local data must never be baked into an image
 frontend/dist/

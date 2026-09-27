@@ -2,12 +2,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Lumi, LumiPose, preloadPoses } from '../components/Lumi';
-import { AnalyzeResult, AnalyzeStatus, analysisStreamUrl, getAnalysisStatus } from '../lib/analysisApi';
+import { AnalyzeResult, AnalyzeStatus, UploadProgress, analysisStreamUrl, getAnalysisStatus } from '../lib/analysisApi';
 import { prefersReducedMotion } from '../lib/motion';
-import { Photo } from '../types';
+import { AnalysisMode, Photo } from '../types';
 
 interface ProcessingProps {
-  jobId: string;
+  /** Null while the photos are still uploading. */
+  jobId: string | null;
+  mode?: AnalysisMode;
+  upload?: UploadProgress | null;
   photos?: Photo[];
   onComplete: (result: AnalyzeResult) => void;
   onError: (message: string) => void;
@@ -20,6 +23,7 @@ type PipelineStep = {
 
 // Matches the step keys the backend actually emits after parallelization
 const PIPELINE_STEPS: PipelineStep[] = [
+  { key: 'uploading', label: 'Sending your photos to Lumi' },
   { key: 'loading_models', label: 'Loading models & cached embeddings' },
   { key: 'analyzing', label: 'Faces, persons, scenes & semantics (CLIP)' },
   { key: 'reid_embedding', label: 'Extracting body embeddings' },
@@ -29,10 +33,21 @@ const PIPELINE_STEPS: PipelineStep[] = [
   { key: 'finalizing', label: 'Preparing gallery' },
 ];
 
+// Analysis off: one quick look per photo, no curation stages.
+const QUICK_STEPS: PipelineStep[] = [
+  { key: 'uploading', label: 'Sending your photos to Lumi' },
+  { key: 'loading_models', label: 'Opening your photos' },
+  { key: 'describing', label: 'Noting what’s in each photo' },
+  { key: 'finalizing', label: 'Laying them out' },
+];
+
 /** What Lumi is doing, and saying, during each stage. */
 const STEP_LUMI: Record<string, { pose: LumiPose; line: string }> = {
+  uploading: { pose: 'camera', line: 'Catching your photos as they fly in…' },
+  queued: { pose: 'sleepy', line: 'Just finishing another batch, you’re next!' },
   loading_models: { pose: 'sleepy', line: 'Stretching… waking up my brain!' },
   analyzing: { pose: 'search', line: 'Looking closely at every face and scene…' },
+  describing: { pose: 'search', line: 'Just a quick peek at each one…' },
   reid_embedding: { pose: 'camera', line: 'Remembering outfits, in case someone turns away.' },
   identity_clustering: { pose: 'tag', line: 'Working out who’s who…' },
   clustering_scoring: { pose: 'sort', line: 'Sorting everything into moments.' },
@@ -45,16 +60,33 @@ const WORKING_POSE: LumiPose = 'star';
 preloadPoses([WORKING_POSE], { animated: true });
 preloadPoses(Object.values(STEP_LUMI).map((s) => s.pose));
 
-export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onComplete, onError }) => {
+function formatMB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
+}
+
+export const Processing: React.FC<ProcessingProps> = ({ jobId, mode = 'full', upload = null, photos = [], onComplete, onError }) => {
+  const quick = mode === 'quick';
+  const steps = quick ? QUICK_STEPS : PIPELINE_STEPS;
   const [progress, setProgress] = useState(0);
   const [currentStepKey, setCurrentStepKey] = useState<string>('loading_models');
-  const [stepLabel, setStepLabel] = useState('Initializing…');
+  const [stepLabel, setStepLabel] = useState('Starting…');
   const [imagesDone, setImagesDone] = useState(0);
   const [done, setDone] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const finishedRef = useRef(false);
+  // The parent re-creates these on every render; reading them through refs
+  // keeps the progress stream from reconnecting each time.
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+  const photoCountRef = useRef(photos.length);
+  onCompleteRef.current = onComplete;
+  onErrorRef.current = onError;
+  photoCountRef.current = photos.length;
 
   useEffect(() => {
+    if (!jobId) return undefined;
+    const onComplete = (result: AnalyzeResult) => onCompleteRef.current(result);
+    const onError = (message: string) => onErrorRef.current(message);
     let alive = true;
     let pollInterval: number | undefined;
     let source: EventSource | null = null;
@@ -77,7 +109,7 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
           return;
         }
         setProgress(100);
-        setImagesDone(photos.length);
+        setImagesDone(photoCountRef.current);
         setDone(true);
         window.setTimeout(() => onComplete(status.result as AnalyzeResult), 900);
       }
@@ -133,7 +165,7 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
       source?.close();
       if (pollInterval !== undefined) window.clearInterval(pollInterval);
     };
-  }, [jobId, onComplete, onError, photos.length]);
+  }, [jobId]);
 
   // Auto-scroll log to the active step
   useEffect(() => {
@@ -145,15 +177,23 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
     }
   }, [currentStepKey]);
 
-  const currentStepIndex = PIPELINE_STEPS.findIndex((s) => s.key === currentStepKey);
-  const activeIdx = currentStepIndex >= 0 ? currentStepIndex : PIPELINE_STEPS.length - 1;
+  const uploading = !jobId;
+  // A queued job waits at the first backend step; unknown keys (newer
+  // backends) count as the last one.
+  const stepKey = uploading ? 'uploading' : currentStepKey === 'queued' ? 'loading_models' : currentStepKey;
+  const currentStepIndex = steps.findIndex((s) => s.key === stepKey);
+  const activeIdx = currentStepIndex >= 0 ? currentStepIndex : steps.length - 1;
+  const uploadPct = upload && upload.total > 0 ? Math.floor((upload.loaded / upload.total) * 100) : 0;
+  const shownProgress = uploading ? uploadPct : progress;
 
   // Which thumbnails to light up: real per-image counts during extraction,
   // then everything once the pipeline moves past the analysis stage.
-  const pastAnalysis = done || activeIdx >= 2;
+  const pastAnalysis = done || activeIdx > steps.findIndex((s) => s.key === (quick ? 'describing' : 'analyzing'));
   const litCount = pastAnalysis ? photos.length : imagesDone;
 
-  const lumi = done ? STEP_LUMI.done : STEP_LUMI[PIPELINE_STEPS[activeIdx]?.key] ?? STEP_LUMI.loading_models;
+  const lumi = done ? STEP_LUMI.done
+    : currentStepKey === 'queued' && !uploading ? STEP_LUMI.queued
+    : STEP_LUMI[steps[activeIdx]?.key] ?? STEP_LUMI.loading_models;
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-10 flex flex-col items-center">
@@ -176,14 +216,21 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
         className="liquid-glass-heavy rounded-[28px] px-6 sm:px-8 py-5 flex items-center gap-5 mb-4 w-full max-w-md"
       >
         <div className="font-display text-5xl font-bold tabular-nums shrink-0 text-slate-900">
-          {progress}<span className="text-lumi-gradient">%</span>
+          {shownProgress}<span className="text-lumi-gradient">%</span>
         </div>
         <div className="min-w-0">
           <h1 className="text-base font-extrabold truncate font-sans">
-            {done ? 'Your gallery is ready!' : 'Analyzing your photos'}
+            {done ? 'Your gallery is ready!' : uploading ? 'Uploading your photos' : quick ? 'Reading your photos' : 'Analyzing your photos'}
           </h1>
-          <p className="text-xs text-slate-500 truncate">{stepLabel}</p>
-          {photos.length > 0 && !done && (
+          <p className="text-xs text-slate-500 truncate tabular-nums">
+            {!uploading ? stepLabel
+              : upload && upload.total > 0
+                ? upload.loaded >= upload.total
+                  ? 'Checking the photos…'
+                  : `${formatMB(upload.loaded)} of ${formatMB(upload.total)} MB sent`
+                : 'Getting ready…'}
+          </p>
+          {photos.length > 0 && !done && !uploading && (
             <p className="text-[11px] text-lumina-600 font-extrabold mt-1 tabular-nums">
               {Math.min(litCount, photos.length)} / {photos.length} photos looked at
             </p>
@@ -194,14 +241,14 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
       <div
         className="w-full max-w-md h-3 rounded-full mb-6 bg-white/70 overflow-hidden shadow-inner"
         role="progressbar"
-        aria-valuenow={progress}
+        aria-valuenow={shownProgress}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label="Analysis progress"
+        aria-label={uploading ? 'Upload progress' : 'Analysis progress'}
       >
         <div
           className="h-full rounded-full transition-[width] duration-500 ease-out"
-          style={{ width: `${progress}%`, background: 'var(--lumi-gradient)' }}
+          style={{ width: `${shownProgress}%`, background: 'var(--lumi-gradient)' }}
         />
       </div>
 
@@ -217,9 +264,10 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
               return (
                 <div key={photo.id} className="relative aspect-square rounded-lg overflow-hidden bg-slate-200/40">
                   <img
-                    src={photo.url}
+                    src={photo.thumbUrl ?? photo.url}
                     alt=""
                     loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover transition-all duration-700"
                     style={{
                       filter: lit ? 'none' : 'grayscale(1) brightness(1.15)',
@@ -247,7 +295,7 @@ export const Processing: React.FC<ProcessingProps> = ({ jobId, photos = [], onCo
         ref={logRef}
         className="w-full max-w-md liquid-glass rounded-[24px] max-h-56 overflow-y-auto overscroll-contain p-1.5 space-y-px scroll-smooth"
       >
-        {PIPELINE_STEPS.map((step, i) => {
+        {steps.map((step, i) => {
           const isDone = i < activeIdx || (i === activeIdx && done);
           const isActive = i === activeIdx && !done;
           return (

@@ -467,3 +467,38 @@ def test_hand_tuned_weights_are_normalised(client):
 
     bad = test_client.put("/api/preferences", headers=headers, json={"weights": {"ear": 1.0}})
     assert bad.status_code == 400
+
+
+def test_quick_mode_skips_full_analysis(client):
+    test_client, server = client
+    calls = []
+    original = server.pipeline.run_quick if hasattr(server.pipeline, "run_quick") else None
+
+    def fake_quick(image_paths, photo_ids, callback=None):
+        calls.append(list(photo_ids))
+        result = json.loads(json.dumps(CANNED_RESULT))
+        result["summary"]["mode"] = "quick"
+        return result
+
+    server.pipeline.run_quick = fake_quick
+    try:
+        files = [("files", ("a.jpg", io.BytesIO(TINY_JPEG), "image/jpeg"))]
+        meta = json.dumps([{"id": "quick-a", "name": "a.jpg", "size": "1 KB"}])
+        resp = test_client.post("/api/analyze", files=files, data={"photoMeta": meta, "mode": "quick"})
+        assert resp.status_code == 200
+        server.job_queue.join()
+        status = test_client.get(f"/api/analyze/{resp.json()['jobId']}").json()
+        assert status["status"] == "completed"
+        assert status["result"]["summary"]["mode"] == "quick"
+        assert calls == [["quick-a"]]
+    finally:
+        if original is not None:
+            server.pipeline.run_quick = original
+
+
+def test_unknown_mode_is_rejected(client):
+    test_client, _ = client
+    files = [("files", ("a.jpg", io.BytesIO(TINY_JPEG), "image/jpeg"))]
+    meta = json.dumps([{"id": "x", "name": "a.jpg", "size": "1 KB"}])
+    resp = test_client.post("/api/analyze", files=files, data={"photoMeta": meta, "mode": "turbo"})
+    assert resp.status_code == 400

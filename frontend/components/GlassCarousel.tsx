@@ -62,6 +62,8 @@ export const GlassCarousel: React.FC<GlassCarouselProps> = ({
   };
 
   if (images.length === 0) return null;
+  // The list can shrink under us (a filter); never sit past its end.
+  const shown = current % images.length;
 
   return (
     <div
@@ -75,7 +77,7 @@ export const GlassCarousel: React.FC<GlassCarouselProps> = ({
           className="carousel-track h-full"
           style={{
             width: `${images.length * 100}%`,
-            transform: `translateX(-${(current * 100) / images.length}%)`,
+            transform: `translateX(-${(shown * 100) / images.length}%)`,
           }}
         >
           {images.map((img, i) => (
@@ -92,12 +94,13 @@ export const GlassCarousel: React.FC<GlassCarouselProps> = ({
                 alt={img.label || `Slide ${i + 1}`}
                 className={`w-full h-full object-cover transition-opacity duration-300 ${loadedImages.has(i) ? '' : 'opacity-0'}`}
                 loading="lazy"
+                decoding="async"
                 onLoad={() => setLoadedImages((prev) => new Set(prev).add(i))}
               />
               {/* Inactive slide overlay */}
               <div
                 className="absolute inset-0 bg-black/20 transition-opacity duration-700"
-                style={{ opacity: i === current ? 0 : 1 }}
+                style={{ opacity: i === shown ? 0 : 1 }}
               />
               {img.label && (
                 <div className="absolute bottom-0 inset-x-0 p-6 bg-gradient-to-t from-black/70 via-black/25 to-transparent">
@@ -134,7 +137,7 @@ export const GlassCarousel: React.FC<GlassCarouselProps> = ({
             <button
               key={i}
               onClick={() => goTo(i)}
-              className={`carousel-dot ${i === current ? 'active' : ''}`}
+              className={`carousel-dot ${i === shown ? 'active' : ''}`}
             />
           ))}
         </div>

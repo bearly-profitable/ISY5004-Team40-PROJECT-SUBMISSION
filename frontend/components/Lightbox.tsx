@@ -177,7 +177,10 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onNavigate, on
     <div
       ref={rootRef}
       className="fixed inset-0 z-[350] flex flex-col"
-      style={{ background: 'rgba(14, 10, 22, 0.94)', backdropFilter: 'blur(14px)' }}
+      // No backdrop blur: behind a near-opaque scrim it was invisible, yet the
+      // drifting background orbs made the browser re-blur the whole screen
+      // every frame.
+      style={{ background: 'rgba(14, 10, 22, 0.985)' }}
       role="dialog"
       aria-modal="true"
       aria-label={item.photo.name}
