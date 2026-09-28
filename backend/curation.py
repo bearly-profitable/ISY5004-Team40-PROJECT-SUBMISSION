@@ -545,7 +545,9 @@ class PreferenceModel:
     """
 
     weights: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
-    lr: float = 0.35
+    # Tuned in eval/experiments.py (lr x l2 grid, simulated users on real
+    # signals, held-out events); 0.35 overshot for users near the defaults.
+    lr: float = 0.2
     l2_to_prior: float = 0.05
     n_updates: int = 0
 

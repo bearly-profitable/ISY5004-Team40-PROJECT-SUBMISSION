@@ -1,0 +1,3 @@
+run,wall_seconds,seconds_per_image,cache_hits,cache_misses,t_image_load,t_cache_lookup,t_feature_extraction,t_reid,t_identity_clustering,t_events_and_nima,t_scoring,t_event_titles,t_total
+cold,81.6024,1.4837,0,55,1.75,0.03,50.39,12.8,0.08,11.71,0.04,0.0,81.59
+warm,1.8992,0.0345,55,0,1.73,0.05,0.0,0.0,0.03,0.02,0.02,0.0,1.89

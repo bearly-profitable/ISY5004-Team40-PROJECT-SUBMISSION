@@ -1,0 +1,143 @@
+Lumina experiment run 20260928-130909: 55 images, 20 reference events
+
+[A] full pipeline, cold then warm
+  cold run: 81.6s, cache hits 0/55
+  warm run: 1.9s, cache hits 55/55
+  scene model: facebook/dinov3-vits16-pretrain-lvd1689m; blink: mediapipe face_landmarker (blendshapes); device: cpu
+  photos with EXIF time: 32/55
+  NIMA: min 3.26, mean 3.86, max 4.88
+
+[B1] identity clustering (label-free)
+  mode=fused: clusters=49 prominent=42 CL-viol=0/526 sil=0.450 stab=0.973
+  mode=face_only: clusters=50 prominent=41 CL-viol=0/526 sil=0.499 stab=0.980
+  mode=body_only: clusters=86 prominent=83 CL-viol=85/976 sil=0.403 stab=0.880
+  fused_threshold=0.45: clusters=77 prominent=55 CL-viol=0/526 sil=0.512 stab=0.974
+  fused_threshold=0.5: clusters=64 prominent=50 CL-viol=0/526 sil=0.481 stab=0.935
+  fused_threshold=0.55: clusters=58 prominent=45 CL-viol=0/526 sil=0.460 stab=0.958
+  fused_threshold=0.58: clusters=49 prominent=42 CL-viol=0/526 sil=0.450 stab=0.976
+  fused_threshold=0.62: clusters=42 prominent=36 CL-viol=0/526 sil=0.471 stab=0.987
+  fused_threshold=0.66: clusters=37 prominent=32 CL-viol=3/526 sil=0.458 stab=0.989
+  fused_threshold=0.7: clusters=35 prominent=30 CL-viol=3/526 sil=0.459 stab=0.995
+  alpha_floor=0.5: clusters=48 prominent=41 CL-viol=0/526 sil=0.436 stab=0.966
+  alpha_floor=0.6: clusters=48 prominent=41 CL-viol=0/526 sil=0.442 stab=0.977
+  alpha_floor=0.7: clusters=49 prominent=42 CL-viol=0/526 sil=0.450 stab=0.974
+  alpha_floor=0.8: clusters=50 prominent=42 CL-viol=0/526 sil=0.457 stab=0.973
+  alpha_floor=0.9: clusters=52 prominent=43 CL-viol=0/526 sil=0.463 stab=0.970
+  face_only_threshold=0.5: clusters=67 prominent=49 CL-viol=0/526 sil=0.500 stab=0.919
+  face_only_threshold=0.55: clusters=60 prominent=44 CL-viol=0/526 sil=0.475 stab=0.974
+  face_only_threshold=0.6: clusters=50 prominent=41 CL-viol=0/526 sil=0.499 stab=0.975
+  face_only_threshold=0.65: clusters=40 prominent=34 CL-viol=0/526 sil=0.489 stab=0.991
+  face_only_threshold=0.7: clusters=36 prominent=31 CL-viol=3/526 sil=0.483 stab=0.991
+
+[B2] event clustering
+  harness reproduces pipeline event partition: True (threshold 0.18)
+  time_weight=0.0: t=0.225 k=22 ARI=0.886 NMI=0.980 hom=1.000 comp=0.961 xdate=0 stab=0.957
+  time_weight=0.2: t=0.225 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.986
+  time_weight=0.35: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.993
+  time_weight=0.5: t=0.150 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=1.000
+  time_weight=0.7: t=0.125 k=22 ARI=0.954 NMI=0.985 hom=1.000 comp=0.971 xdate=0 stab=0.931
+  time_tau_hours=1: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.987
+  time_tau_hours=3: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.984
+  time_tau_hours=6: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.989
+  time_tau_hours=12: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.990
+  time_tau_hours=24: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.978
+  linkage=average: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.981
+  linkage=complete: t=0.225 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.992
+  linkage=single: t=0.150 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=1.000
+  sweep=coarse0.25_patience3 (previous default): t=0.100 k=27 ARI=0.745 NMI=0.949 hom=1.000 comp=0.902 xdate=0 stab=0.749
+  sweep=fine0.025_patience3: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.997
+  sweep=fine0.025_full: t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.987
+  sweep=step0.025_patience10 (production): t=0.175 k=21 ARI=0.985 NMI=0.994 hom=1.000 comp=0.988 xdate=0 stab=0.969
+  semester1_baseline=DINO+multihot(w=5), no time: t=0.300 k=21 ARI=0.549 NMI=0.887 hom=0.885 comp=0.889 xdate=2 stab=0.874
+  oracle threshold for time_w0: t=0.275 ARI=0.985 k=21
+  oracle threshold for time_w0.35: t=0.175 ARI=0.985 k=21
+  oracle threshold for semester1: t=0.150 ARI=0.600 k=28
+
+[B3] best-shot ranking on reference events
+  no span floors: top1 changes=4/16 tau=0.662 avoidable blinks=0
+  no blink constraint: top1 changes=3/16 tau=0.699 avoidable blinks=3
+  semester-1 weights: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  semester-1 rule (weights, no floors, no constraint): top1 changes=8/16 tau=0.315 avoidable blinks=3
+  NIMA only: top1 changes=12/16 tau=-0.146 avoidable blinks=4
+  ablate centrality: top1 changes=4/16 tau=0.637 avoidable blinks=0
+  ablate nimaScore: top1 changes=1/16 tau=0.945 avoidable blinks=0
+  ablate faceSharpness: top1 changes=4/16 tau=0.683 avoidable blinks=0
+  ablate faceSize: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  ablate detScore: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  ablate poseQuality: top1 changes=0/16 tau=0.949 avoidable blinks=0
+  ablate ear: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb centrality x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb centrality x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb nimaScore x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb nimaScore x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb faceSharpness x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb faceSharpness x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb faceSize x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb faceSize x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb detScore x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb detScore x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb poseQuality x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb poseQuality x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb ear x0.8: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  perturb ear x1.2: top1 changes=0/16 tau=1.000 avoidable blinks=0
+  normalised signal range across scored photos: centrality=1.00, nimaScore=0.74, faceSharpness=1.00, faceSize=1.00, detScore=1.00, poseQuality=1.00, ear=1.00
+
+[B4a] preference learning: tune (lr, l2_to_prior) on a separate simulated population
+  lr=0.005 l2=0.05  mean gain=-0.010 worst cell=-0.080 responsive=False (nima 0.29)
+  lr=0.005 l2=0.2   mean gain=-0.011 worst cell=-0.080 responsive=False (nima 0.29)
+  lr=0.005 l2=0.5   mean gain=-0.011 worst cell=-0.080 responsive=False (nima 0.29)
+  lr=0.005 l2=1.0   mean gain=-0.011 worst cell=-0.080 responsive=False (nima 0.29)
+  lr=0.005 l2=2.0   mean gain=-0.012 worst cell=-0.080 responsive=False (nima 0.28)
+  lr=0.01  l2=0.05  mean gain=+0.007 worst cell=-0.065 responsive=False (nima 0.33)
+  lr=0.01  l2=0.2   mean gain=+0.007 worst cell=-0.065 responsive=False (nima 0.33)
+  lr=0.01  l2=0.5   mean gain=+0.005 worst cell=-0.075 responsive=False (nima 0.32)
+  lr=0.01  l2=1.0   mean gain=+0.004 worst cell=-0.075 responsive=False (nima 0.31)
+  lr=0.01  l2=2.0   mean gain=+0.000 worst cell=-0.075 responsive=False (nima 0.30)
+  lr=0.02  l2=0.05  mean gain=+0.053 worst cell=-0.035 responsive=True (nima 0.41)
+  lr=0.02  l2=0.2   mean gain=+0.052 worst cell=-0.030 responsive=True (nima 0.39)
+  lr=0.02  l2=0.5   mean gain=+0.049 worst cell=-0.035 responsive=True (nima 0.37)
+  lr=0.02  l2=1.0   mean gain=+0.038 worst cell=-0.040 responsive=False (nima 0.34)
+  lr=0.02  l2=2.0   mean gain=+0.029 worst cell=-0.040 responsive=False (nima 0.31)
+  lr=0.05  l2=0.05  mean gain=+0.100 worst cell=-0.040 responsive=True (nima 0.54)
+  lr=0.05  l2=0.2   mean gain=+0.097 worst cell=-0.035 responsive=True (nima 0.50)
+  lr=0.05  l2=0.5   mean gain=+0.093 worst cell=-0.025 responsive=True (nima 0.44)
+  lr=0.05  l2=1.0   mean gain=+0.085 worst cell=-0.020 responsive=True (nima 0.37)
+  lr=0.05  l2=2.0   mean gain=+0.058 worst cell=-0.035 responsive=False (nima 0.32)
+  lr=0.1   l2=0.05  mean gain=+0.107 worst cell=-0.030 responsive=True (nima 0.60)
+  lr=0.1   l2=0.2   mean gain=+0.102 worst cell=-0.045 responsive=True (nima 0.54)
+  lr=0.1   l2=0.5   mean gain=+0.107 worst cell=-0.045 responsive=True (nima 0.45)
+  lr=0.1   l2=1.0   mean gain=+0.097 worst cell=-0.035 responsive=True (nima 0.37)
+  lr=0.1   l2=2.0   mean gain=+0.064 worst cell=-0.070 responsive=False (nima 0.31)
+  lr=0.2   l2=0.05  mean gain=+0.131 worst cell=-0.060 responsive=True (nima 0.62)
+  lr=0.2   l2=0.2   mean gain=+0.130 worst cell=-0.080 responsive=True (nima 0.56)
+  lr=0.2   l2=0.5   mean gain=+0.119 worst cell=-0.065 responsive=True (nima 0.45)
+  lr=0.2   l2=1.0   mean gain=+0.098 worst cell=-0.095 responsive=True (nima 0.37)
+  lr=0.2   l2=2.0   mean gain=+0.071 worst cell=-0.060 responsive=False (nima 0.32)
+  lr=0.35  l2=0.05  mean gain=+0.117 worst cell=-0.095 responsive=True (nima 0.57)
+  lr=0.35  l2=0.2   mean gain=+0.116 worst cell=-0.100 responsive=True (nima 0.52)
+  lr=0.35  l2=0.5   mean gain=+0.116 worst cell=-0.090 responsive=True (nima 0.44)
+  lr=0.35  l2=1.0   mean gain=+0.087 worst cell=-0.095 responsive=True (nima 0.37)
+  lr=0.35  l2=2.0   mean gain=+0.059 worst cell=-0.105 responsive=False (nima 0.32)
+  selected lr=0.2 l2_to_prior=0.05 (mean gain +0.131, worst cell -0.060)
+
+[B4b] preference learning: held-out evaluation on fresh simulated users
+  [previous (lr=0.35, l2=0.05): lr=0.35, l2_to_prior=0.05] 16 reference events with >= 2 photos; test fraction 0.3; 200 splits; 5 passes
+  [previous (lr=0.35, l2=0.05)] aesthete | noise=0.0: agreement 0.512 -> 0.767 after 10.0 swaps (random 0.351); regret 0.283 -> 0.072
+  [previous (lr=0.35, l2=0.05)] portraitist | noise=0.0: agreement 0.819 -> 0.880 after 4.5 swaps (random 0.351); regret 0.068 -> 0.027
+  [previous (lr=0.35, l2=0.05)] storyteller | noise=0.0: agreement 0.810 -> 0.788 after 6.7 swaps (random 0.352); regret 0.073 -> 0.047
+  [previous (lr=0.35, l2=0.05)] random users (Dirichlet 0.7) | noise=0.0: agreement 0.632 -> 0.807 after 8.1 swaps (random 0.352); regret 0.173 -> 0.080
+  [previous (lr=0.35, l2=0.05)] aesthete | noise=0.05: agreement 0.514 -> 0.759 after 20.2 swaps (random 0.349); regret 0.281 -> 0.106
+  [previous (lr=0.35, l2=0.05)] portraitist | noise=0.05: agreement 0.798 -> 0.820 after 12.7 swaps (random 0.354); regret 0.089 -> 0.091
+  [previous (lr=0.35, l2=0.05)] storyteller | noise=0.05: agreement 0.837 -> 0.775 after 17.2 swaps (random 0.350); regret 0.057 -> 0.069
+  [previous (lr=0.35, l2=0.05)] random users (Dirichlet 0.7) | noise=0.05: agreement 0.630 -> 0.778 after 17.4 swaps (random 0.351); regret 0.176 -> 0.098
+  [tuned: lr=0.2, l2_to_prior=0.05] 16 reference events with >= 2 photos; test fraction 0.3; 200 splits; 5 passes
+  [tuned] aesthete | noise=0.0: agreement 0.512 -> 0.776 after 7.6 swaps (random 0.351); regret 0.283 -> 0.052
+  [tuned] portraitist | noise=0.0: agreement 0.819 -> 0.848 after 5.2 swaps (random 0.351); regret 0.068 -> 0.036
+  [tuned] storyteller | noise=0.0: agreement 0.810 -> 0.849 after 5.1 swaps (random 0.352); regret 0.073 -> 0.046
+  [tuned] random users (Dirichlet 0.7) | noise=0.0: agreement 0.632 -> 0.796 after 8.5 swaps (random 0.352); regret 0.173 -> 0.079
+  [tuned] aesthete | noise=0.05: agreement 0.514 -> 0.784 after 18.9 swaps (random 0.349); regret 0.281 -> 0.082
+  [tuned] portraitist | noise=0.05: agreement 0.798 -> 0.807 after 12.2 swaps (random 0.354); regret 0.089 -> 0.091
+  [tuned] storyteller | noise=0.05: agreement 0.837 -> 0.820 after 17.1 swaps (random 0.350); regret 0.057 -> 0.071
+  [tuned] random users (Dirichlet 0.7) | noise=0.05: agreement 0.630 -> 0.785 after 17.0 swaps (random 0.351); regret 0.176 -> 0.087
+
+Wrote results to ..\report\experiments\20260928-130909

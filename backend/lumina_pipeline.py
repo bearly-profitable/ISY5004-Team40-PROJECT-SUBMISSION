@@ -149,10 +149,12 @@ class PipelineConfig:
     reid_assign_threshold: float = 0.75
 
     # Agglomerative event clustering — silhouette sweep range
-    event_sweep_start: float = 0.1
-    event_sweep_stop: float = 3.0
-    event_sweep_step: float = 0.25
-    event_sweep_patience: int = 3  # stop if no improvement for N consecutive thresholds
+    # Blended event distances live in [0, ~1]; a 0.25 step jumped past the
+    # silhouette peak (~0.2) and over-split events.
+    event_sweep_start: float = 0.05
+    event_sweep_stop: float = 1.0
+    event_sweep_step: float = 0.025
+    event_sweep_patience: int = 10  # stop if no improvement for N consecutive thresholds
 
     # MMR diversity picks per event
     mmr_max_picks: int = 6
@@ -169,7 +171,7 @@ class PipelineConfig:
     w_ear: float = 0.10
 
     # Bump when extraction logic changes so stale cache entries are ignored
-    cache_version: str = "v5"  # v5: eyes_open from MediaPipe blink blendshapes
+    cache_version: str = "v6"  # v6: NIMA no longer cached as 0.0 under NumPy 2
 
     def weights_dict(self) -> Dict[str, float]:
         return {
@@ -949,19 +951,21 @@ class LuminaPipeline:
                 continue
 
             batch_tensor = torch.stack(tensors).to(self.device)
+            # pyiqa returns shape (n, 1); NumPy 2 refuses float() on a non-0-d array
             try:
                 with torch.inference_mode():
-                    scores = self.nima_metric(batch_tensor).cpu().numpy()
-                for path_str, score in zip(valid_paths, np.atleast_1d(scores)):
+                    scores = self.nima_metric(batch_tensor).cpu().numpy().reshape(-1)
+                for path_str, score in zip(valid_paths, scores):
                     nima_scores[path_str] = float(score)
-            except Exception:
-                # fallback: score individually (e.g. pyiqa version doesn't batch)
+            except Exception as exc:
+                print(f"[Lumina] Batched NIMA failed ({exc}); scoring one by one.")
                 for path_str, t in zip(valid_paths, tensors):
                     try:
                         with torch.inference_mode():
-                            score = float(self.nima_metric(t.unsqueeze(0).to(self.device)).cpu().numpy())
-                        nima_scores[path_str] = score
-                    except Exception:
+                            score = self.nima_metric(t.unsqueeze(0).to(self.device)).cpu().numpy().reshape(-1)[0]
+                        nima_scores[path_str] = float(score)
+                    except Exception as exc_one:
+                        print(f"[Lumina] NIMA failed for {Path(path_str).name}: {exc_one}")
                         nima_scores[path_str] = 0.0
 
             if callback:

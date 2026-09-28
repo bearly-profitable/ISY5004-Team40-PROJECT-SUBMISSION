@@ -1,0 +1,28 @@
+config,events_scored,top1_changes_vs_default,mean_kendall_tau_vs_default,avoidable_blink_picks,events_with_eyes_open_option,pick_sharpness_percentile,pick_nima_percentile
+capstone default,16,0,1.0,0,16,0.8203,0.6406
+no span floors,16,4,0.6622,0,16,0.7344,0.7109
+no blink constraint,16,3,0.6994,3,16,0.9349,0.6927
+semester-1 weights,16,0,1.0,0,16,0.8203,0.6406
+"semester-1 rule (weights, no floors, no constraint)",16,8,0.3155,3,16,0.8073,0.7839
+NIMA only,16,12,-0.1458,4,16,0.737,1.0
+ablate centrality,16,4,0.6369,0,16,0.8568,0.7604
+ablate nimaScore,16,1,0.9449,0,16,0.8281,0.6172
+ablate faceSharpness,16,4,0.683,0,16,0.7057,0.7135
+ablate faceSize,16,0,1.0,0,16,0.8203,0.6406
+ablate detScore,16,0,1.0,0,16,0.8203,0.6406
+ablate poseQuality,16,0,0.9494,0,16,0.8203,0.6406
+ablate ear,16,0,1.0,0,16,0.8203,0.6406
+perturb centrality x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb centrality x1.2,16,0,1.0,0,16,0.8203,0.6406
+perturb nimaScore x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb nimaScore x1.2,16,0,1.0,0,16,0.8203,0.6406
+perturb faceSharpness x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb faceSharpness x1.2,16,0,1.0,0,16,0.8203,0.6406
+perturb faceSize x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb faceSize x1.2,16,0,1.0,0,16,0.8203,0.6406
+perturb detScore x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb detScore x1.2,16,0,1.0,0,16,0.8203,0.6406
+perturb poseQuality x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb poseQuality x1.2,16,0,1.0,0,16,0.8203,0.6406
+perturb ear x0.8,16,0,1.0,0,16,0.8203,0.6406
+perturb ear x1.2,16,0,1.0,0,16,0.8203,0.6406
