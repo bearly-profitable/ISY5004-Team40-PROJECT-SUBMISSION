@@ -1,0 +1,847 @@
+{
+  "createdAt": "2026-09-28T06:44:34Z",
+  "dataset": "C:\\Users\\agust\\ISY5004-Team40-PROJECT-SUBMISSION\\report\\Test Images",
+  "cache": "C:\\Users\\agust\\ISY5004-Team40-PROJECT-SUBMISSION\\backend\\eval\\experiments_cache_dinov3.db",
+  "sceneModel": null,
+  "preference": {
+    "lr": 0.2,
+    "l2_to_prior": 0.05
+  },
+  "selection": "Of the events with at least 2 photos, the 8 smallest gaps between Lumina's top two photos are the training set. The next 4 are held out. The 2 closest training events are shown a second time and are not used for learning. Events 6, 17, 18, and 1 are extra training.",
+  "train": [
+    {
+      "eventId": "19",
+      "phase": "train",
+      "margin": 0.0091,
+      "topTwoScoreGap": -0.0091,
+      "defaultPhotoId": "19-1.jpeg",
+      "photos": [
+        {
+          "photoId": "19-1.jpeg",
+          "finalScore": 0.4922,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.0,
+            "faceSize": 1.0,
+            "detScore": 0.1246,
+            "poseQuality": 0.3592,
+            "ear": 1.0,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "19-2.jpeg",
+          "finalScore": 0.5013,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 0.0,
+            "nimaScore": 0.4053
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "9",
+      "phase": "train",
+      "margin": 0.011,
+      "topTwoScoreGap": 0.011,
+      "defaultPhotoId": "9-2.JPG",
+      "photos": [
+        {
+          "photoId": "9-2.JPG",
+          "finalScore": 0.7085,
+          "normSignals": {
+            "centrality": 0.9655,
+            "faceSharpness": 0.9536,
+            "faceSize": 0.0801,
+            "detScore": 0.874,
+            "poseQuality": 0.7868,
+            "ear": 0.753,
+            "nimaScore": 0.4737
+          }
+        },
+        {
+          "photoId": "9-1.JPG",
+          "finalScore": 0.6975,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.1115,
+            "detScore": 1.0,
+            "poseQuality": 0.7797,
+            "ear": 0.7806,
+            "nimaScore": 0.3211
+          }
+        },
+        {
+          "photoId": "9-6.JPG",
+          "finalScore": 0.506,
+          "normSignals": {
+            "centrality": 0.6433,
+            "faceSharpness": 0.2423,
+            "faceSize": 0.0014,
+            "detScore": 0.9175,
+            "poseQuality": 0.9901,
+            "ear": 0.4685,
+            "nimaScore": 0.4678
+          }
+        },
+        {
+          "photoId": "9-5.JPG",
+          "finalScore": 0.4965,
+          "normSignals": {
+            "centrality": 0.5913,
+            "faceSharpness": 0.3693,
+            "faceSize": 0.0066,
+            "detScore": 0.8984,
+            "poseQuality": 1.0,
+            "ear": 0.6348,
+            "nimaScore": 0.3367
+          }
+        },
+        {
+          "photoId": "9-4.JPG",
+          "finalScore": 0.4106,
+          "normSignals": {
+            "centrality": 0.5881,
+            "faceSharpness": 0.8434,
+            "faceSize": 0.0695,
+            "detScore": 0.6027,
+            "poseQuality": 0.0,
+            "ear": 1.0,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "9-7.JPG",
+          "finalScore": 0.3485,
+          "normSignals": {
+            "centrality": 0.1101,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0014,
+            "detScore": 0.6233,
+            "poseQuality": 0.5214,
+            "ear": 0.5294,
+            "nimaScore": 0.7382
+          }
+        },
+        {
+          "photoId": "9-3.JPG",
+          "finalScore": 0.4864,
+          "normSignals": {
+            "centrality": 0.5596,
+            "faceSharpness": 0.6638,
+            "faceSize": 0.0231,
+            "detScore": 0.9468,
+            "poseQuality": 0.9187,
+            "ear": 0.3347,
+            "nimaScore": 0.2878
+          }
+        },
+        {
+          "photoId": "9-8.JPG",
+          "finalScore": 0.2151,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0449,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.1528,
+            "ear": 0.431,
+            "nimaScore": 0.6
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "4",
+      "phase": "train",
+      "margin": 0.0129,
+      "topTwoScoreGap": 0.0129,
+      "defaultPhotoId": "4-2.jpg",
+      "photos": [
+        {
+          "photoId": "4-2.jpg",
+          "finalScore": 0.4772,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.1702,
+            "ear": 0.5747,
+            "nimaScore": 0.0107
+          }
+        },
+        {
+          "photoId": "4-1.jpg",
+          "finalScore": 0.4643,
+          "normSignals": {
+            "centrality": 0.9859,
+            "faceSharpness": 0.9634,
+            "faceSize": 0.0,
+            "detScore": 0.0776,
+            "poseQuality": 0.1904,
+            "ear": 0.504,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "4-3.jpg",
+          "finalScore": 0.0677,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0172,
+            "detScore": 0.1226,
+            "poseQuality": 0.0,
+            "ear": 0.4238,
+            "nimaScore": 0.0699
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "14",
+      "phase": "train",
+      "margin": 0.0542,
+      "topTwoScoreGap": 0.0542,
+      "defaultPhotoId": "14-1.jpeg",
+      "photos": [
+        {
+          "photoId": "14-1.jpeg",
+          "finalScore": 0.5112,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.112,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 1.0,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "14-2.jpeg",
+          "finalScore": 0.457,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0,
+            "detScore": 0.5459,
+            "poseQuality": 0.2438,
+            "ear": 0.6278,
+            "nimaScore": 0.3703
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "7",
+      "phase": "train",
+      "margin": 0.0777,
+      "topTwoScoreGap": 0.0777,
+      "defaultPhotoId": "7-2.JPG",
+      "photos": [
+        {
+          "photoId": "7-2.JPG",
+          "finalScore": 0.6243,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.2005,
+            "faceSize": 0.9627,
+            "detScore": 0.9873,
+            "poseQuality": 0.9861,
+            "ear": 1.0,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "7-1.JPG",
+          "finalScore": 0.5466,
+          "normSignals": {
+            "centrality": 0.7306,
+            "faceSharpness": 0.0,
+            "faceSize": 1.0,
+            "detScore": 1.0,
+            "poseQuality": 1.0,
+            "ear": 1.0,
+            "nimaScore": 0.0557
+          }
+        },
+        {
+          "photoId": "7-3.JPG",
+          "finalScore": 0.39,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 1.0,
+            "nimaScore": 0.5601
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "3",
+      "phase": "train",
+      "margin": 0.0816,
+      "topTwoScoreGap": 0.0816,
+      "defaultPhotoId": "3-2.jpg",
+      "photos": [
+        {
+          "photoId": "3-2.jpg",
+          "finalScore": 0.5176,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0,
+            "detScore": 0.8111,
+            "poseQuality": 0.1223,
+            "ear": 0.6479,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "3-3.jpg",
+          "finalScore": 0.436,
+          "normSignals": {
+            "centrality": 0.6303,
+            "faceSharpness": 0.0,
+            "faceSize": 0.1202,
+            "detScore": 1.0,
+            "poseQuality": 0.9621,
+            "ear": 0.629,
+            "nimaScore": 0.2293
+          }
+        },
+        {
+          "photoId": "3-1.jpg",
+          "finalScore": 0.3465,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.8312,
+            "faceSize": 0.1339,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 0.63,
+            "nimaScore": 0.5818
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "16",
+      "phase": "train",
+      "margin": 0.0975,
+      "topTwoScoreGap": -0.0975,
+      "defaultPhotoId": "16-1.jpeg",
+      "photos": [
+        {
+          "photoId": "16-1.jpeg",
+          "finalScore": 0.3327,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0,
+            "detScore": 0.1269,
+            "poseQuality": 0.0471,
+            "ear": 0.5167,
+            "nimaScore": 0.0801
+          }
+        },
+        {
+          "photoId": "16-2.jpeg",
+          "finalScore": 0.4302,
+          "normSignals": {
+            "centrality": 0.9792,
+            "faceSharpness": 1.0,
+            "faceSize": 0.2639,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 0.0905,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "16-3.jpeg",
+          "finalScore": 0.2163,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.3166,
+            "faceSize": 0.4135,
+            "detScore": 0.3096,
+            "poseQuality": 0.1506,
+            "ear": 0.2568,
+            "nimaScore": 0.285
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "2",
+      "phase": "train",
+      "margin": 0.0995,
+      "topTwoScoreGap": 0.0995,
+      "defaultPhotoId": "2-2.jpg",
+      "photos": [
+        {
+          "photoId": "2-2.jpg",
+          "finalScore": 0.4628,
+          "normSignals": {
+            "centrality": 0.8916,
+            "faceSharpness": 0.9642,
+            "faceSize": 0.0469,
+            "detScore": 0.0177,
+            "poseQuality": 0.017,
+            "ear": 0.8795,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "2-1.jpg",
+          "finalScore": 0.3633,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.1775,
+            "faceSize": 0.0,
+            "detScore": 0.0997,
+            "poseQuality": 0.0,
+            "ear": 0.5265,
+            "nimaScore": 0.1163
+          }
+        },
+        {
+          "photoId": "2-3.jpg",
+          "finalScore": 0.0921,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0945,
+            "detScore": 0.0,
+            "poseQuality": 0.1664,
+            "ear": 0.6368,
+            "nimaScore": 0.0092
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "6",
+      "phase": "train",
+      "margin": 0.196,
+      "topTwoScoreGap": 0.196,
+      "defaultPhotoId": "6-2.JPG",
+      "shownPhotoIds": [
+        "6-2.JPG",
+        "6-1.JPG"
+      ],
+      "photos": [
+        {
+          "photoId": "6-2.JPG",
+          "finalScore": 0.5538,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 1.0,
+            "nimaScore": 0.2154
+          }
+        },
+        {
+          "photoId": "6-1.JPG",
+          "finalScore": 0.3578,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0453,
+            "detScore": 0.0558,
+            "poseQuality": 0.0049,
+            "ear": 1.0,
+            "nimaScore": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "17",
+      "phase": "train",
+      "margin": 0.2201,
+      "topTwoScoreGap": 0.2201,
+      "defaultPhotoId": "17-3.jpeg",
+      "shownPhotoIds": [
+        "17-3.jpeg",
+        "17-2.jpeg",
+        "17-1.jpeg"
+      ],
+      "photos": [
+        {
+          "photoId": "17-3.jpeg",
+          "finalScore": 0.6661,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.9138,
+            "faceSize": 0.1879,
+            "detScore": 0.2862,
+            "poseQuality": 0.1873,
+            "ear": 0.7595,
+            "nimaScore": 0.6049
+          }
+        },
+        {
+          "photoId": "17-2.jpeg",
+          "finalScore": 0.446,
+          "normSignals": {
+            "centrality": 0.9477,
+            "faceSharpness": 0.6023,
+            "faceSize": 0.0,
+            "detScore": 0.1224,
+            "poseQuality": 0.0843,
+            "ear": 0.5518,
+            "nimaScore": 0.1959
+          }
+        },
+        {
+          "photoId": "17-1.jpeg",
+          "finalScore": 0.1511,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0,
+            "faceSize": 1.0,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 0.5108,
+            "nimaScore": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "18",
+      "phase": "train",
+      "margin": 0.3373,
+      "topTwoScoreGap": 0.3373,
+      "defaultPhotoId": "18-3.jpeg",
+      "shownPhotoIds": [
+        "18-3.jpeg",
+        "18-2.jpeg",
+        "18-1.jpeg",
+        "18-4.jpeg"
+      ],
+      "photos": [
+        {
+          "photoId": "18-3.jpeg",
+          "finalScore": 0.5106,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.9795,
+            "faceSize": 0.1679,
+            "detScore": 0.0659,
+            "poseQuality": 0.0465,
+            "ear": 0.5676,
+            "nimaScore": 0.1286
+          }
+        },
+        {
+          "photoId": "18-2.jpeg",
+          "finalScore": 0.1733,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.5593,
+            "faceSize": 0.0825,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 0.5759,
+            "nimaScore": 0.0943
+          }
+        },
+        {
+          "photoId": "18-1.jpeg",
+          "finalScore": 0.153,
+          "normSignals": {
+            "centrality": 0.3108,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0,
+            "detScore": 0.1211,
+            "poseQuality": 0.1709,
+            "ear": 0.5212,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "18-4.jpeg",
+          "finalScore": 0.3431,
+          "normSignals": {
+            "centrality": 0.7773,
+            "faceSharpness": 0.5972,
+            "faceSize": 0.161,
+            "detScore": 0.0585,
+            "poseQuality": 0.1537,
+            "ear": 0.181,
+            "nimaScore": 0.0268
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "1",
+      "phase": "train",
+      "margin": 0.3686,
+      "topTwoScoreGap": -0.3686,
+      "defaultPhotoId": "1-1.jpg",
+      "shownPhotoIds": [
+        "1-1.jpg",
+        "1-2.jpg",
+        "1-3.jpg"
+      ],
+      "photos": [
+        {
+          "photoId": "1-1.jpg",
+          "finalScore": 0.1086,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.604,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 0.4819,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "1-2.jpg",
+          "finalScore": 0.4772,
+          "normSignals": {
+            "centrality": 0.833,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0114,
+            "detScore": 0.0506,
+            "poseQuality": 0.3552,
+            "ear": 0.4483,
+            "nimaScore": 0.1397
+          }
+        },
+        {
+          "photoId": "1-3.jpg",
+          "finalScore": 0.4429,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.5803,
+            "faceSize": 0.0,
+            "detScore": 0.2157,
+            "poseQuality": 0.4416,
+            "ear": 0.4382,
+            "nimaScore": 0.0282
+          }
+        }
+      ]
+    }
+  ],
+  "heldout": [
+    {
+      "eventId": "5",
+      "phase": "heldout",
+      "margin": 0.1199,
+      "topTwoScoreGap": 0.1199,
+      "defaultPhotoId": "5-1.jpg",
+      "photos": [
+        {
+          "photoId": "5-1.jpg",
+          "finalScore": 0.5192,
+          "normSignals": {
+            "centrality": 0.9956,
+            "faceSharpness": 0.9859,
+            "faceSize": 0.0748,
+            "detScore": 0.1206,
+            "poseQuality": 0.0,
+            "ear": 1.0,
+            "nimaScore": 0.0357
+          }
+        },
+        {
+          "photoId": "5-2.jpg",
+          "finalScore": 0.3993,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.4931,
+            "ear": 1.0,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "5-3.jpg",
+          "finalScore": 0.3326,
+          "normSignals": {
+            "centrality": 0.0135,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0271,
+            "detScore": 0.3792,
+            "poseQuality": 0.1005,
+            "ear": 1.0,
+            "nimaScore": 0.1898
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "20",
+      "phase": "heldout",
+      "margin": 0.1217,
+      "topTwoScoreGap": 0.1217,
+      "defaultPhotoId": "20-2.jpeg",
+      "photos": [
+        {
+          "photoId": "20-2.jpeg",
+          "finalScore": 0.5168,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.8895,
+            "faceSize": 0.2359,
+            "detScore": 0.134,
+            "poseQuality": 0.168,
+            "ear": 0.656,
+            "nimaScore": 0.0827
+          }
+        },
+        {
+          "photoId": "20-1.jpeg",
+          "finalScore": 0.3951,
+          "normSignals": {
+            "centrality": 0.228,
+            "faceSharpness": 1.0,
+            "faceSize": 0.4851,
+            "detScore": 0.0,
+            "poseQuality": 0.1359,
+            "ear": 0.7067,
+            "nimaScore": 0.2212
+          }
+        },
+        {
+          "photoId": "20-3.jpeg",
+          "finalScore": 0.2385,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0966,
+            "faceSize": 0.0,
+            "detScore": 0.2632,
+            "poseQuality": 0.0,
+            "ear": 0.7939,
+            "nimaScore": 0.526
+          }
+        },
+        {
+          "photoId": "20-4.jpeg",
+          "finalScore": 0.1883,
+          "normSignals": {
+            "centrality": 0.2081,
+            "faceSharpness": 0.0,
+            "faceSize": 0.3212,
+            "detScore": 0.4125,
+            "poseQuality": 0.1562,
+            "ear": 0.6791,
+            "nimaScore": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "8",
+      "phase": "heldout",
+      "margin": 0.1349,
+      "topTwoScoreGap": 0.1349,
+      "defaultPhotoId": "8-1.JPG",
+      "photos": [
+        {
+          "photoId": "8-1.JPG",
+          "finalScore": 0.725,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 1.0,
+            "detScore": 0.0088,
+            "poseQuality": 0.755,
+            "ear": 0.8563,
+            "nimaScore": 0.2537
+          }
+        },
+        {
+          "photoId": "8-2.JPG",
+          "finalScore": 0.5901,
+          "normSignals": {
+            "centrality": 0.9579,
+            "faceSharpness": 0.6064,
+            "faceSize": 0.9149,
+            "detScore": 0.2178,
+            "poseQuality": 0.7329,
+            "ear": 0.8398,
+            "nimaScore": 0.0
+          }
+        },
+        {
+          "photoId": "8-3.JPG",
+          "finalScore": 0.2593,
+          "normSignals": {
+            "centrality": 0.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.0,
+            "ear": 1.0,
+            "nimaScore": 0.637
+          }
+        }
+      ]
+    },
+    {
+      "eventId": "15",
+      "phase": "heldout",
+      "margin": 0.1501,
+      "topTwoScoreGap": 0.1501,
+      "defaultPhotoId": "15-2.jpeg",
+      "photos": [
+        {
+          "photoId": "15-2.jpeg",
+          "finalScore": 0.465,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 1.0,
+            "faceSize": 0.0,
+            "detScore": 0.0052,
+            "poseQuality": 0.0,
+            "ear": 0.6314,
+            "nimaScore": 0.0065
+          }
+        },
+        {
+          "photoId": "15-1.jpeg",
+          "finalScore": 0.3149,
+          "normSignals": {
+            "centrality": 1.0,
+            "faceSharpness": 0.0,
+            "faceSize": 0.0,
+            "detScore": 0.0,
+            "poseQuality": 0.0119,
+            "ear": 0.6371,
+            "nimaScore": 0.0
+          }
+        }
+      ]
+    }
+  ],
+  "retestEventIds": [
+    "19",
+    "9"
+  ],
+  "unusedEventIds": []
+}

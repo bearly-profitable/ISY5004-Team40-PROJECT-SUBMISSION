@@ -38,6 +38,12 @@ backend/images/
 backend/outputs/
 backend/face_landmarker.task
 backend/=0.10.0
+report/human_study/responses.csv
+report/human_study/results.csv
+report/human_study/result_details.csv
+report/human_study/sessions/
+report/human_study/public/form/
+report/human_study/api/data/
 
 # Node
 node_modules/

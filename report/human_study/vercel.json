@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "python3 build.py",
+  "redirects": [
+    { "source": "/form/key.csv", "destination": "/", "permanent": false },
+    { "source": "/form/events_people.csv", "destination": "/", "permanent": false }
+  ],
+  "rewrites": [
+    { "source": "/photo/:path*", "destination": "/form/:path*" }
+  ],
+  "functions": {
+    "api/*.py": {
+      "excludeFiles": "{form/**,public/**}"
+    }
+  }
+}

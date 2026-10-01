@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Which photo would you keep?</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: #f6f4f0; color: #1c1a17; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.6rem; font-weight: 500; margin: 0 0 8px; }
+  p { line-height: 1.45; }
+  .muted { color: #5c564e; font-family: "Segoe UI", sans-serif; font-size: 0.95rem; }
+  label { display: block; font-family: "Segoe UI", sans-serif; font-size: 0.9rem; margin-bottom: 6px; }
+  input[type=text] { width: 100%; font-size: 1.05rem; padding: 12px; border: 1px solid #c8c2b8; border-radius: 8px; }
+  button { font-family: "Segoe UI", sans-serif; font-size: 1rem; padding: 12px 18px; border-radius: 8px; border: 0; background: #1c1a17; color: white; }
+  button.secondary { background: transparent; color: #1c1a17; border: 1px solid #c8c2b8; }
+  button:disabled { opacity: 0.4; }
+  .row { display: flex; gap: 8px; margin-top: 16px; }
+  .grid { display: grid; gap: 12px; margin-top: 16px; }
+  .grid.n2 { grid-template-columns: 1fr 1fr; }
+  .grid.n3, .grid.n4 { grid-template-columns: 1fr 1fr; }
+  .tile { padding: 0; border: 4px solid transparent; border-radius: 12px; overflow: hidden; background: #e7e2da; cursor: pointer; }
+  .tile img { display: block; width: 100%; height: auto; max-height: 72vh; object-fit: contain; background: #e7e2da; }
+  .tile.selected { border-color: #1c1a17; }
+  .choice-image { display: block; width: 100%; height: auto; max-height: 72vh; object-fit: contain; background: #e7e2da; border-radius: 12px; margin-top: 12px; }
+  .choices { display: grid; gap: 10px; margin-top: 16px; }
+  .choices button { width: 100%; text-align: left; font-size: 1.05rem; padding: 16px 18px; background: white; color: #1c1a17; border: 2px solid #c8c2b8; }
+  .choices button.selected { border-color: #1c1a17; background: #1c1a17; color: white; }
+  @media (max-width: 700px) {
+    .grid.n2, .grid.n3, .grid.n4 { grid-template-columns: 1fr; }
+    .tile img, .choice-image { max-height: none; }
+  }
+  .progress { font-family: "Segoe UI", sans-serif; font-size: 0.85rem; letter-spacing: 0.04em; text-transform: uppercase; color: #5c564e; }
+  .error { color: #8a2b2b; font-family: "Segoe UI", sans-serif; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const app = document.getElementById("app");
+let session = null;
+let step = 0;
+let saving = false;
+const answers = {};
+
+function startScreen() {
+  app.innerHTML = `
+    <h1>Photo study</h1>
+    <p class="muted">There are 25 questions. For most of them, tap the one photo you would keep. For the last few, look at the picture and pick one of the two answers. There is no right answer.</p>
+    <label for="name">Your name</label>
+    <input id="name" type="text" maxlength="40" autocomplete="name" placeholder="So we can tell responses apart">
+    <div class="row"><button id="go">Start</button></div>
+    <p id="err" class="error"></p>`;
+  document.getElementById("go").onclick = start;
+  document.getElementById("name").addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
+}
+
+async function start() {
+  const name = document.getElementById("name").value.trim();
+  const err = document.getElementById("err");
+  if (!name) { err.textContent = "Please enter your name."; return; }
+  err.textContent = "";
+  const res = await fetch("/api/session", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({name})
+  });
+  if (!res.ok) { err.textContent = "Could not start. Please try again in a moment."; return; }
+  session = await res.json();
+  step = 0;
+  show();
+}
+
+function show() {
+  const current = session.steps[step];
+  const chosen = answers[step];
+  if (current.kind === "choice") return showChoice(current, chosen);
+  app.innerHTML = `
+    <div class="progress">Question ${step + 1} of ${session.steps.length}</div>
+    <h1>${current.prompt}</h1>
+    <div class="grid n${current.photos.length}" id="grid"></div>
+    <div class="row">
+      <button class="secondary" id="back" ${step === 0 ? "disabled" : ""}>Back</button>
+      <button id="next" ${chosen ? "" : "disabled"}>Next</button>
+    </div>
+    <p id="err" class="error"></p>`;
+  const grid = document.getElementById("grid");
+  for (const photo of current.photos) {
+    const tile = document.createElement("button");
+    tile.className = "tile" + (photo.id === chosen ? " selected" : "");
+    tile.type = "button";
+    const img = document.createElement("img");
+    img.src = photo.src;
+    img.alt = "Photo in this question";
+    tile.appendChild(img);
+    tile.onclick = () => { answers[step] = photo.id; show(); };
+    grid.appendChild(tile);
+  }
+  document.getElementById("back").onclick = () => { step -= 1; show(); };
+  document.getElementById("next").onclick = saveAndAdvance;
+}
+
+function showChoice(current, chosen) {
+  app.innerHTML = `
+    <div class="progress">Question ${step + 1} of ${session.steps.length}</div>
+    <h1>${current.prompt}</h1>
+    <img class="choice-image" src="${current.image}" alt="Photos for this question">
+    <div class="choices" id="choices"></div>
+    <div class="row">
+      <button class="secondary" id="back" ${step === 0 ? "disabled" : ""}>Back</button>
+      <button id="next" ${chosen ? "" : "disabled"}>Next</button>
+    </div>
+    <p id="err" class="error"></p>`;
+  const box = document.getElementById("choices");
+  for (const choice of current.choices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = choice;
+    if (choice === chosen) button.className = "selected";
+    button.onclick = () => { answers[step] = choice; show(); };
+    box.appendChild(button);
+  }
+  document.getElementById("back").onclick = () => { step -= 1; show(); };
+  document.getElementById("next").onclick = saveAndAdvance;
+}
+
+async function saveAndAdvance() {
+  if (saving) return;
+  const index = step;
+  const err = document.getElementById("err");
+  const next = document.getElementById("next");
+  const back = document.getElementById("back");
+  saving = true;
+  if (next) next.disabled = true;
+  if (back) back.disabled = true;
+  const res = await fetch("/api/answer", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      sessionId: session.sessionId,
+      index: index,
+      photoId: answers[index],
+      token: session.token || ""
+    })
+  });
+  saving = false;
+  if (!res.ok) {
+    if (err) err.textContent = "Could not save that answer. Please try Next again.";
+    if (next) next.disabled = false;
+    if (back) back.disabled = index === 0;
+    return;
+  }
+  if (index + 1 >= session.steps.length) return thanks();
+  step = index + 1;
+  show();
+}
+
+function thanks() {
+  app.innerHTML = `
+    <h1>Thank you.</h1>
+    <p class="muted">Your choices are saved. You can close this page.</p>`;
+}
+
+startScreen();
+</script>
+</body>
+</html>

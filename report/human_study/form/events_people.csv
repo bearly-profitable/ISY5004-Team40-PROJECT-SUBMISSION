@@ -1,0 +1,8 @@
+question,kind,prompt,choices,folder,file,summary,photos
+19,event-pair,Are these two photos from the same occasion?,Same occasion | Different occasions,Q19,group.jpg,17-1.jpeg + 17-3.jpeg  distance 0.319,17-1.jpeg 17-3.jpeg
+20,event-pair,Are these two photos from the same occasion?,Same occasion | Different occasions,Q20,group.jpg,19-1.jpeg + 20-1.jpeg  distance 0.239,19-1.jpeg 20-1.jpeg
+21,event-pair,Are these two photos from the same occasion?,Same occasion | Different occasions,Q21,group.jpg,2-2.jpg + 9-3.JPG  distance 0.316,2-2.jpg 9-3.JPG
+22,event-pair,Are these two photos from the same occasion?,Same occasion | Different occasions,Q22,group.jpg,6-1.JPG + 7-1.JPG  distance 0.376,6-1.JPG 7-1.JPG
+23,person-pair,Is this one person or two people?,One person | Two people,Q23,group.jpg,person_0 vs person_22  similarity 0.594,13.jpg 19-1.jpeg
+24,person-pair,Is this one person or two people?,One person | Two people,Q24,group.jpg,person_11 vs person_21  similarity 0.565,16-2.jpeg 17-1.jpeg
+25,person-pair,Is this one person or two people?,One person | Two people,Q25,group.jpg,person_46 vs person_4  similarity 0.552,16-3.jpeg 17-3.jpeg
