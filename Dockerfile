@@ -3,7 +3,7 @@
 # keep their own Dockerfiles for a two-service deploy.)
 
 # ---------- web app ----------
-FROM node:20-alpine AS web
+FROM node:22-alpine AS web
 
 WORKDIR /web
 

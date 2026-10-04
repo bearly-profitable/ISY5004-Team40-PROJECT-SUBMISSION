@@ -41,19 +41,17 @@ or ask for AI-written album captions.
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="https://youtu.be/rqZu26yoBlM"><img src="https://img.youtube.com/vi/rqZu26yoBlM/hqdefault.jpg" alt="Lumina product video" width="100%"></a><br>
+      <a href="https://youtu.be/rqZu26yoBlM"><img src="docs/videos/product.jpg" alt="Lumina product video" width="100%"></a><br>
       <b><a href="https://youtu.be/rqZu26yoBlM">Product video</a></b> (1½ min)<br>
       <sub>A short introduction to Lumina and Lumi</sub>
     </td>
     <td align="center" width="50%">
-      <a href="https://youtu.be/ES735eLGOpM"><img src="https://img.youtube.com/vi/ES735eLGOpM/hqdefault.jpg" alt="Lumina app walkthrough" width="100%"></a><br>
+      <a href="https://youtu.be/ES735eLGOpM"><img src="docs/videos/walkthrough.jpg" alt="Lumina app walkthrough" width="100%"></a><br>
       <b><a href="https://youtu.be/ES735eLGOpM">App walkthrough</a></b> (7½ min)<br>
       <sub>The whole app, from upload to album, video and 3D world, with how the pipeline works</sub>
     </td>
   </tr>
 </table>
-
-The [capstone presentation](https://youtu.be/63fbOCV3cN4) is also on YouTube.
 
 ## Meet Lumi
 
@@ -486,21 +484,6 @@ Root Directory with **Config file path** `/backend/railway.toml` or `/frontend/r
 | `Final presentation/` | Final presentation slides (`Lumina_Capstone.pptx`) |
 | `LUMINA_TUNING_RESEARCH_NOTEBOOK.ipynb` | Semester 1 research and tuning notebook, with notes on what the capstone changed |
 | `Latex format/` | Semester 1 report (PDF and Word) and its LaTeX template |
-
-The Semester 1 notebook covers the original pipeline. The capstone changes (face and body fusion,
-scene-and-time events, the floored ranker and blink rule, per-person selection, MMR, explanations, CLIP
-search and naming, preference learning, persistence and the evaluation) live in `backend/`, with tests
-in `backend/tests/` and evaluation in `backend/eval/`.
-
-## Credits
-
-The landing film and Lumi's portrait were sharpened with
-[Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN). Albums use the
-[Fraunces](https://github.com/undercasetype/Fraunces) and
-[Nunito](https://github.com/googlefonts/nunito) typefaces under the SIL Open Font License (licences in
-`backend/assets/fonts/`). Earlier versions of Lumina used 小黑, adapted from Ian's
-[`ian-xiaohei-illustrations`](https://github.com/helloianneo/ian-xiaohei-illustrations) (MIT); Lumi has
-since taken over.
 
 <div align="center">
 <br>
