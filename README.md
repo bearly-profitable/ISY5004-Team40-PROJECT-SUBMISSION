@@ -10,8 +10,11 @@ Lumina sorts a pile of photos into events and people, picks the best shot of eac
 and tells you why it chose it. Lumi, our mascot, keeps you company along the way.
 
 [Live demo](https://lumina-production-639d.up.railway.app/) ·
+[Product video](https://youtu.be/rqZu26yoBlM) ·
+[App walkthrough](https://youtu.be/ES735eLGOpM) ·
 [Presentation video](https://youtu.be/63fbOCV3cN4) ·
-[Final report](Final%20Report/FINAL_REPORT.pdf)
+[Technical paper](report/lumina_technical_paper_with_humantest.pdf) ·
+[Slides](Final%20presentation/Lumina_Capstone.pptx)
 
 </div>
 
@@ -21,15 +24,36 @@ and tells you why it chose it. Lumi, our mascot, keeps you company along the way
 
 Drop in up to 200 photos from a trip, a wedding or a family weekend. Lumina will:
 
-- **Group them** into events (the beach day, the dinner, the graduation) and name each one.
+- **Group them** into events, shown in the app as *moments* (the beach day, the dinner, the graduation), and name each one.
 - **Recognise the people** in them, even when a face is turned away, and cluster each person across the set.
 - **Pick the best shot** of every person at every event, and explain the choice in plain words.
+- **Clean up.** Duplicates, blinks and blurry shots are set aside with the reason shown. Nothing is deleted until you confirm.
 - **Search** the collection by description: "group hug", "sunset", "someone laughing".
 - **Learn your taste.** When you swap in a photo you prefer, Lumina adjusts how it scores the next one.
-- **Make an album.** Export the picks as a designed, printable PDF, with Lumi holding the photos if you like.
+- **Make something.** A designed, printable PDF album with Lumi holding the photos, a 1080p video cut to the
+  beat, or a small 3D island where Lumi walks among your moments.
 
 Everything runs on our own backend. Photos are never sent to a third party unless you press **Enhance**
 or ask for AI-written album captions.
+
+## Videos
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/rqZu26yoBlM"><img src="https://img.youtube.com/vi/rqZu26yoBlM/hqdefault.jpg" alt="Lumina product video" width="100%"></a><br>
+      <b><a href="https://youtu.be/rqZu26yoBlM">Product video</a></b> (1½ min)<br>
+      <sub>A short introduction to Lumina and Lumi</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/ES735eLGOpM"><img src="https://img.youtube.com/vi/ES735eLGOpM/hqdefault.jpg" alt="Lumina app walkthrough" width="100%"></a><br>
+      <b><a href="https://youtu.be/ES735eLGOpM">App walkthrough</a></b> (7½ min)<br>
+      <sub>The whole app, from upload to album, video and 3D world, with how the pipeline works</sub>
+    </td>
+  </tr>
+</table>
+
+The [capstone presentation](https://youtu.be/63fbOCV3cN4) is also on YouTube.
 
 ## Meet Lumi
 
@@ -52,8 +76,9 @@ narrated progress screen while your photos are analysed, the gallery, your profi
 **Lumi dresses for your photos.** Each event is labelled zero-shot with CLIP, and that label picks
 Lumi's outfit: sunglasses and a swim ring for the beach, a party hat and cake for a birthday, a
 backpack and walking stick for a hike. The gallery's
-event headers and the album's chapter pages use the same mapping (`backend/mascot.py` `SCENE_POSES`,
-mirrored in `frontend/lib/lumiScenes.ts`), so an event looks the same everywhere. Consecutive album
+event headers, the album's chapter pages, the video and the 3D world use the same mapping
+(`backend/mascot.py` `SCENE_POSES`, mirrored in `frontend/lib/lumiScenes.ts`), so an event looks the
+same everywhere. Consecutive album
 pages never repeat a pose.
 
 **How Lumi is built.**
@@ -87,50 +112,67 @@ enforces a hard spending cap and logs every call to `ledger.json`; the whole mas
 | Stage | What happens |
 |---|---|
 | **Upload and queue** | Photos are uploaded from the React app. The FastAPI backend queues the job on a single worker, since the ML models are shared and not thread-safe. Progress streams back over Server-Sent Events. |
-| **Feature extraction** | Four streams run on every image: ArcFace (face identity and quality), YOLOv8 (people), DINO (scene context) and CLIP (semantics). Body crops go through OSNet for re-identification. Features are cached in SQLite by the image's SHA-256, so a photo is never analysed twice. |
+| **Feature extraction** | Four streams run on every image: ArcFace (face identity and quality), YOLOv8 (people), DINOv3 (scene context) and CLIP (semantics). Body crops go through OSNet for re-identification, and MediaPipe blink blendshapes measure open eyes. Features are cached in SQLite by the image's SHA-256, so a photo is never analysed twice. |
 | **Identity clustering** | Faces are matched to bodies, then each person gets a fused embedding weighted by how much the face can be trusted. Agglomerative clustering groups them; faceless detections join the nearest person by body appearance. |
-| **Event clustering** | DINO scene vectors are clustered with an automatically tuned threshold, and each event is named by comparing its CLIP centroid to a prompt bank. |
-| **Scoring and selection** | Seven quality signals produce a composite score. The best shot is chosen per event and per person, with an explanation attached. |
+| **Event clustering** | DINOv3 scene distances, blended with capture time, are clustered with a silhouette-tuned threshold. Each event is named by comparing its CLIP centroid to a prompt bank. |
+| **Scoring and selection** | Seven quality signals produce a composite score, and a blink always loses to an open-eyes shot. The best shot is chosen per event and per person, with an explanation attached. |
 | **Personalisation** | Your "use this one instead" swaps become pairwise preferences, learned into a personal weighting of the seven signals. |
+
+The full method, with every operating point, is in the
+[technical paper](report/lumina_technical_paper_with_humantest.pdf) (Section III).
 
 ### Identity clustering
 
-1. Faces are assigned to person boxes by greedy IoU and containment matching with a head-position prior,
-   so each body gets at most one face and overlapping people in group shots stay separate.
-2. Each face gets a fused embedding `e_fused = α·e_face ⊕ (1−α)·e_body`. The weight `α` rises with
-   ArcFace detection confidence and face size, with a floor of 0.5, so a detected face always leads.
-   In this concatenated space, cosine similarity equals the α-weighted blend of face and body similarity.
-3. Agglomerative clustering (cosine distance, average linkage) runs over the fused embeddings. Faceless
-   detections attach to the nearest identity by ReID centroid, and HDBSCAN on ReID alone handles
-   collections with no faces at all.
+1. Faces are assigned to person boxes one-to-one. A pair needs at least half the face inside the person
+   box, and is scored by that overlap plus a head-position prior (face near the top centre of the box).
+   Each body gets at most one face, so overlapping people in group shots stay separate.
+2. Each face gets a fused embedding `e_fused = [√α·e_face ; √(1−α)·e_body]`. The square roots make
+   cosine similarity in this space exactly the α-weighted blend of face and body similarity. `α` rises
+   with ArcFace detection confidence and face size, from a floor of 0.7 up to 1, so a detected face
+   always leads.
+3. Agglomerative clustering (cosine distance 0.58, average linkage) runs over the fused embeddings.
+   Faceless detections attach to the nearest identity by ReID centroid (Euclidean distance below 0.75),
+   and HDBSCAN on ReID alone handles collections with no faces at all. A cluster is shown in the cast
+   if it appears in at least two photos or has one large face, so bystanders stay out.
 4. `identity_mode = fused | face_only | body_only` switches the ablations used in `backend/eval/`.
 
 ### Events
 
-DINO embeddings are clustered agglomeratively, with the distance threshold swept from 0.1 to 3.0 and
-chosen by silhouette score. Each event's CLIP centroid is compared against a 20-entry prompt bank, and a
-confident match replaces "Event 3" with a name such as "Beach" or "Graduation".
+Each pair of photos gets a distance that blends scene and time: `0.65 × (1 − DINOv3 cosine) +
+0.35 × min(|Δt| / 6 h, 1)`. Photos without an EXIF time fall back to the scene distance alone.
+Agglomerative clustering (average linkage) sweeps the threshold from 0.05 to 1.0 in steps of 0.025 and
+keeps the one with the best silhouette, stopping after ten steps without improvement. Who appears in a
+photo is deliberately left out, so an identity mistake can't redraw an event. Each event's CLIP centroid
+is compared against a 26-entry prompt bank, and a match at cosine 0.25 or above replaces "Event 3" with
+a name such as "Beach" or "Graduation".
 
 ### Scoring
 
-Seven signals, min-max normalised within each event:
+Seven signals, combined with these default weights:
 
 | Signal | Default weight | Measures |
 |---|---|---|
-| Centrality | 0.25 | Cosine similarity to the event's DINO centroid |
+| Centrality | 0.25 | Closeness (Euclidean) to the event's mean DINOv3 embedding |
 | NIMA | 0.25 | Aesthetic quality, 0 to 10 |
 | Face sharpness | 0.15 | Laplacian variance of the face region |
 | Face size | 0.10 | Face area relative to the image |
-| Detection confidence | 0.10 | InsightFace detection score |
-| Pose quality | 0.10 | Penalty for yaw, pitch and roll |
-| Eye aspect ratio | 0.05 | Eyes open rather than mid-blink |
+| Detection confidence | 0.05 | InsightFace detection score |
+| Pose quality | 0.10 | Frontal score from yaw, pitch and roll |
+| Eyes open | 0.10 | 1 − the stronger MediaPipe blink score; the lowest face in a group photo counts |
 
+- **Floored normalisation.** Signals are min-max normalised within the event, but each range has a
+  minimum span (for example 0.75 NIMA points), so a tiny difference inside a burst can't decide the
+  winner. Eyes-open is absolute and never rescaled.
+- **Blink rule.** A photo with a detected face and eyes-open below 0.45 ranks after every open-eyes
+  photo in the event. If every frame is a blink, the best one still wins.
 - **Per event**, the highest composite wins, with an explanation such as "sharpest face, eyes open, most
   representative of the scene; beat the runner-up mainly on pose".
 - **Per event and person**, each person's photos are re-scored using that person's own face signals.
   This is the "best shot of each person at each event".
+- **Cleanup** marks near-duplicates (DINOv3 cosine 0.965 or above, keeping the best-ranked copy),
+  blurry faces and blinks, and shows the reason on each.
 - **Highlights** use Maximal Marginal Relevance, `λ·relevance − (1−λ)·max similarity to selected`, with
-  λ at 0.9, 0.7 and 0.45 for the Quality, Balanced and Diverse modes.
+  λ at 0.9, 0.7 and 0.45 for the Quality, Balanced and Diverse modes, up to six per event.
 
 An optional facial geometry view uses MediaPipe FaceMesh (468 landmarks) for symmetry, proportions and
 per-feature scores.
@@ -138,16 +180,44 @@ per-feature scores.
 ### Learning from you
 
 Promoting a different photo to Best Shot is a pairwise observation: *this one beats that one*. Lumina
-takes one Bradley-Terry SGD step over the difference between the two photos' signal vectors, with an L2
-pull toward the defaults and a projection back onto the simplex. The learned weights:
+takes one Bradley-Terry SGD step (learning rate 0.2) over the difference between the two photos' signal
+vectors, with an L2 pull (0.05) toward the defaults and a projection back onto the simplex, so a few
+noisy swaps can't overwrite the ranker. The learned weights:
 
 - are shown on the profile page as "My Taste", learned against default for each signal,
 - can re-rank any session on demand (`POST /api/rescore/{jobId}`),
-- converge on synthetic users in 20 to 60 swaps (`backend/eval/eval_preferences.py`).
+- are kept per user and never retrain the models.
+
+In the 13-person study below, one pass of learning did not yet beat the default weights on held-out
+questions (24 matches against 26).
 
 Corrections are saved on the server and logged, and the log doubles as evaluation data. You can rename,
 merge or split people, move photos between them, re-pin an event's best shot (which also feeds
 preference learning), and rename or delete events.
+
+---
+
+## Evaluation
+
+Measured on 55 of our own photos in 20 occasions (details in the paper, Section V; code in
+[`backend/eval/`](backend/eval/README.md); the run is in `report/experiments/20260928-130909/`).
+
+| Question | Result |
+|---|---|
+| Events | ARI 0.985 against our folder grouping, with a label-free threshold (the Semester 1 features reach 0.549) |
+| People | 0 of 526 same-photo face pairs merged into one person, stability 0.973 under 80% subsampling |
+| Blinks | Without the blink rule, 3 of 16 winners have closed eyes; with it, none |
+| What moves the pick | NIMA alone changes 12 of 16 winners; centrality and sharpness 4 each; pose, face size or a ±20% weight change, none |
+| Speed | Cold pass 82 s, cached repeat 1.9 s |
+
+**Keep-one study.** Thirteen people picked the photo they would keep on 16 occasions (234 picks).
+Lumina's displayed order scores 0.53 where a random pick scores 0.50: above chance, but not by much.
+People also change their minds (16 of 26 repeat answers matched the first) and disagree with each other.
+On one occasion all thirteen kept the wide group shot that Lumina ranked last, because everyone was in
+it. That is why Cleanup explains every frame it sets aside rather than keeping a single winner, and why
+"who is in the frame" is the next signal to add.
+
+There are no identity labels and no public benchmark yet, so these results are indicative.
 
 ---
 
@@ -184,6 +254,9 @@ error instead of returning an invented picture.
 |---|---|---|---|
 | `openai/gpt-5.4-image-2` (default) | 0.96 | ~$0.23 | Fixed output size, so non-square photos are re-framed |
 | `google/gemini-3.1-flash-image` | 0.94 | ~$0.07 | Edits in place and keeps the aspect ratio |
+
+The identity scores are spot checks from development. The paper does not evaluate retouching, and the
+0.45 / 0.65 cut-offs were not fitted on a labelled retouch set.
 
 ---
 
@@ -241,9 +314,10 @@ verifies the Supabase access token on each request. The schema is in
 | OSNet (torchreid) | Body re-identification | 512-d embeddings on 256 × 128 crops |
 | DINOv3 ViT-S/16 (DINOv2 fallback) | Scene understanding | Event grouping |
 | CLIP ViT-B/32 | Semantics | Text search and zero-shot event naming |
-| Agglomerative clustering | Identities and events | Cosine, average linkage; silhouette-tuned for events |
+| Agglomerative clustering | Identities and events | Average linkage; cosine for identities, scene + time for events, silhouette-tuned |
 | HDBSCAN | No-face fallback | Density-based clustering on ReID embeddings |
 | NIMA (pyiqa) | Aesthetics | Composition, colour and exposure, 0 to 10 |
+| MediaPipe Face Landmarker | Open eyes | Blink blendshapes for the eyes-open signal and the blink rule |
 | MMR | Diverse selection | Tunable relevance and diversity |
 | Bradley-Terry SGD | Preference learning | Personal weights from pairwise swaps |
 | MediaPipe FaceMesh | Facial geometry | 468 landmarks |
@@ -259,7 +333,7 @@ verifies the Supabase access token on each request. The schema is in
 | Auth | Supabase access tokens identify signed-in users; anonymous browsers use a client id. An optional shared secret (`LUMINA_API_KEY` / `VITE_API_KEY`) locks the API for public deploys. |
 | Tests | `backend/tests/`: pytest units for fusion, MMR, IoU matching, explanations, preference learning, corrections, the store, bento tiling, PDF rendering, mascot pose selection, the identity guard and the OpenRouter client, plus API tests against a mocked pipeline and a mocked OpenRouter. |
 | CI | GitHub Actions runs the backend unit tests and the frontend typecheck and build on every push. |
-| Evaluation | `backend/eval/`: identity-clustering ablations (ARI, NMI), event clustering, search Recall@K, preference convergence and cache speed-up. See [`backend/eval/README.md`](backend/eval/README.md). |
+| Evaluation | `backend/eval/experiments.py` (identity, events, ranker ablations, timing) and `backend/eval/human_study.py` (keep-one study) produce the paper's numbers. See [`backend/eval/README.md`](backend/eval/README.md). |
 
 <details>
 <summary><b>API reference</b></summary>
@@ -350,7 +424,7 @@ OPENROUTER_IMAGE_MODEL=openai/gpt-5.4-image-2
 # LUMINA_API_KEY=shared-secret     # lock the API for public deploys
 # JOB_TTL_HOURS=24                 # anonymous session retention
 # USER_JOB_TTL_HOURS=720           # signed-in session retention
-# MAX_PHOTOS=300                   # per-job cap on the server
+# MAX_PHOTOS=200                   # per-job cap on the server (the web app also stops at 200)
 ```
 
 ### Setting up sign-in
@@ -366,8 +440,8 @@ OPENROUTER_IMAGE_MODEL=openai/gpt-5.4-image-2
 ```bash
 cd backend
 ../venv/Scripts/python.exe -m pytest tests -q
-../venv/Scripts/python.exe eval/eval_preferences.py   # synthetic preference convergence
-# evaluations on labelled data: see backend/eval/README.md
+../venv/Scripts/python.exe eval/experiments.py "../report/Test Images" --out ../report/experiments
+# keep-one study and the earlier harness: see backend/eval/README.md
 ```
 
 ## Deploying to Railway
@@ -408,16 +482,15 @@ Root Directory with **Config file path** `/backend/railway.toml` or `/frontend/r
 | `backend/` | FastAPI server, ML pipeline, album renderer, tests and evaluation scripts |
 | `supabase/` | Database schema for profiles, session labels and avatars |
 | `tools/mascot/` | The one-off scripts that generated Lumi, with the spending ledger |
-| `Final Report/` | Final project report (PDF) |
-| `Final Recorded Presentation/` | Recorded presentation (MP4) |
-| `LUMINA_TUNING_RESEARCH_NOTEBOOK.ipynb` | Research and tuning notebook |
-| `backend/Lumina_fine_tuned_eventbased_aggloreid_weighted_final.ipynb` | Semester 1 pipeline: model choices, tuning, ablations and qualitative results |
-| `Latex format/` | Report source and the Semester 1 report |
+| `report/` | Technical paper (`lumina_technical_paper_with_humantest.tex` and `.pdf`), its figures, the experiment run, the keep-one study form, and a superseded draft in `archive/` |
+| `Final presentation/` | Final presentation slides (`Lumina_Capstone.pptx`) |
+| `LUMINA_TUNING_RESEARCH_NOTEBOOK.ipynb` | Semester 1 research and tuning notebook, with notes on what the capstone changed |
+| `Latex format/` | Semester 1 report (PDF and Word) and its LaTeX template |
 
-The Semester 1 notebook covers the original pipeline. The capstone additions (embedding fusion,
-per-person selection, MMR, explanations, CLIP search and naming, preference learning, persistence and
-the evaluation harness) live in `backend/`, with tests in `backend/tests/` and evaluation in
-`backend/eval/`.
+The Semester 1 notebook covers the original pipeline. The capstone changes (face and body fusion,
+scene-and-time events, the floored ranker and blink rule, per-person selection, MMR, explanations, CLIP
+search and naming, preference learning, persistence and the evaluation) live in `backend/`, with tests
+in `backend/tests/` and evaluation in `backend/eval/`.
 
 ## Credits
 

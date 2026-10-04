@@ -318,7 +318,7 @@ REJECT_SCORE_PERCENTILE = 0.25  # bottom-of-event score with no redeeming rank
 # becomes a full-weight 1.0-vs-0.0 swing that drowns out real signals like a
 # blink. Flooring the divisor keeps noise proportionally small.
 SIGNAL_SPAN_FLOORS = {
-    "centrality": 0.06,     # cosine distance to the event centroid
+    "centrality": 0.06,     # Euclidean distance to the event's mean embedding
     "nimaScore": 0.75,      # NIMA points (0-10 scale)
     "faceSharpness": 60.0,  # Laplacian variance
     "faceSize": 0.008,      # fraction of image area

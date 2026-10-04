@@ -60,7 +60,7 @@ STATIC_DIR: Path | None = _static.resolve() if (_static / "index.html").is_file(
 JOB_TTL_HOURS = float(os.getenv("JOB_TTL_HOURS", "24"))
 # Sessions of signed-in users are kept longer than anonymous ones.
 USER_JOB_TTL_HOURS = float(os.getenv("USER_JOB_TTL_HOURS", "720"))
-MAX_PHOTOS = int(os.getenv("MAX_PHOTOS", "300"))
+MAX_PHOTOS = int(os.getenv("MAX_PHOTOS", "200"))
 API_KEY = (os.getenv("LUMINA_API_KEY") or "").strip()  # empty = auth disabled
 
 # Upload limits. Uploads are decoded by several ML models, so anything that is

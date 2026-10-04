@@ -60,7 +60,7 @@ const BEATS: (Beat & { from: number; to: number })[] = [
   },
   {
     eyebrow: 'Step 4 · Pick',
-    title: 'The best shot, every time',
+    title: 'A best shot for every moment',
     body: 'Seven quality signals choose the keeper, and Lumi tells you why.',
     from: 0.81, to: 1.01,
   },

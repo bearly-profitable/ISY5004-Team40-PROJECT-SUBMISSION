@@ -21,7 +21,7 @@
 \IEEEauthorblockN{Agustinus Benyamin Prasetyo and Ong Qing Quan}
 \IEEEauthorblockA{Institute of Systems Science, National University of Singapore\\
 Singapore 119615\\
-Group 40, MTech Intelligent Systems capstone}
+AIS Group 40, ISY5004 capstone}
 }
 
 \maketitle
@@ -145,6 +145,7 @@ image may carry an EXIF capture time $t_i$. The model returns a partition of
 images into events, a set of identity clusters, a total order inside each
 event, a best photograph per person inside each event, three highlight sets,
 optional text-query ranks, and a weight vector that later jobs can reuse.
+The application shows events as \emph{moments}.
 Figure~\ref{fig:pipeline} is the data flow. Encoders are frozen. Everything
 after the embeddings is deterministic given the configuration in
 Table~\ref{tab:operating}. Association, fusion, events, the ranker and
@@ -505,7 +506,9 @@ file is never overwritten.
 The encoders run in one Python service. Jobs are serial because the loaded
 networks are not thread-safe. Features are cached by file hash, so a repeated
 batch skips inference. Photographs leave the service only for the optional
-retouch and album title.
+retouch and album title. The web application on this service, at
+\url{https://lumina-production-639d.up.railway.app/}, also exports an album,
+a video and a 3D view of the events; none of them feeds back into the model.
 
 \section{Evaluation}
 \label{sec:eval}
@@ -601,7 +604,7 @@ Oracle, this distance & 0.175 & 21 & 0.985 & --- \\
 \end{table}
 
 Table~\ref{tab:events} is the result, and Figure~\ref{fig:eventcurves} is why
-the sweep changed. The coarse grid of Section~\ref{sec:events}'s predecessor,
+the sweep changed. The earlier coarse grid of Section~\ref{sec:events},
 steps of $0.25$ from $0.1$, has its silhouette maximum at the first point it
 tries. That cuts the 20 occasions into 27 clusters (ARI $0.745$). Steps of
 $0.025$ put the silhouette peak at $0.175$, which is also the threshold the
@@ -751,7 +754,9 @@ background or a face the detector never saw.
 Further work follows the keep-one study. Repeat more than two occasions, and
 keep one weight vector per person, so inconsistency is measured rather than
 averaged away. Stop treating one best picture as the curation: several frames
-can remain, and a frame set aside should show which signal caused it. Extend
+can remain, and a frame set aside should show which signal caused it. The
+application's Cleanup view is a first step: it labels each frame it sets aside
+as a duplicate, a blink or a blur, and deletes only when the user confirms. Extend
 the seven weights. The first candidate is how many of the occasion's people
 are in the frame, which is the group-portrait case above, not a larger NIMA
 weight. A public album with identity labels, a second grouping of the
