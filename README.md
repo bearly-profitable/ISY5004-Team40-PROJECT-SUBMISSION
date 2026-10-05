@@ -7,7 +7,7 @@
 **Your best photos, found for you.**
 
 Lumina sorts a pile of photos into events and people, picks the best shot of each person at each event,
-and tells you why it chose it. Lumi, our mascot, keeps you company along the way.
+and tells you why it chose it.
 
 [Live demo](https://lumina-production-639d.up.railway.app/) ·
 [Product video](https://youtu.be/rqZu26yoBlM) ·
@@ -52,54 +52,6 @@ or ask for AI-written album captions.
     </td>
   </tr>
 </table>
-
-## Meet Lumi
-
-<table>
-  <tr>
-    <td align="center"><img src="frontend/public/lumi/wave.webp" width="84" alt=""><br><sub>Hello</sub></td>
-    <td align="center"><img src="frontend/public/lumi/search.webp" width="84" alt=""><br><sub>Looking</sub></td>
-    <td align="center"><img src="frontend/public/lumi/sort.webp" width="84" alt=""><br><sub>Sorting</sub></td>
-    <td align="center"><img src="frontend/public/lumi/beach.webp" width="84" alt=""><br><sub>Beach</sub></td>
-    <td align="center"><img src="frontend/public/lumi/birthday.webp" width="84" alt=""><br><sub>Birthday</sub></td>
-    <td align="center"><img src="frontend/public/lumi/hiking.webp" width="84" alt=""><br><sub>Hiking</sub></td>
-    <td align="center"><img src="frontend/public/lumi/hug.webp" width="84" alt=""><br><sub>Hug</sub></td>
-  </tr>
-</table>
-
-Lumi is a small bao-bun bear with a camera lens for a tummy, drawn in Lumina's lavender, rose and peach.
-Lumi appears throughout the app: the scroll-driven film on the landing page, the upload screen, a
-narrated progress screen while your photos are analysed, the gallery, your profile, and the album itself.
-
-**Lumi dresses for your photos.** Each event is labelled zero-shot with CLIP, and that label picks
-Lumi's outfit: sunglasses and a swim ring for the beach, a party hat and cake for a birthday, a
-backpack and walking stick for a hike. The gallery's
-event headers, the album's chapter pages, the video and the 3D world use the same mapping
-(`backend/mascot.py` `SCENE_POSES`, mirrored in `frontend/lib/lumiScenes.ts`), so an event looks the
-same everywhere. Consecutive album
-pages never repeat a pose.
-
-**How Lumi is built.**
-
-- **30 pre-rendered poses** (`frontend/public/lumi/`, `backend/assets/lumi/`) cover app states
-  (waving, thinking, searching), album jobs (carrying prints, pegging a photo, handing out name tags)
-  and scenes (beach, wedding, dinner, night out and more). The app never calls a model to draw Lumi.
-- **Four outfits** (Classic, Mint, Honey, Ocean) are colour matrices rather than extra artwork. The
-  backend applies them to the PDF and the browser applies the same values as a CSS filter, so every
-  pose exists in every outfit.
-- **Album frames** (`backend/assets/lumi/frames/`) show Lumi hugging a blank card. The card is cut out
-  as a window (`frames.json` records its outline), so the album places the real photo underneath and
-  Lumi's paws overlap its edges.
-
-All of Lumi was generated once, offline, by the scripts in `tools/mascot/`. The OpenRouter client there
-enforces a hard spending cap and logs every call to `ledger.json`; the whole mascot cost about $2.60.
-
-| Asset | Made with |
-|---|---|
-| Character sheet and pose sheets (six poses per image, chroma-keyed and cut apart) | Gemini 3.1 Flash Image |
-| Album frames | Gemini 3.1 Flash Image |
-| Landing film: five keyframes, then four clips each running from one keyframe to the next | Veo 3.1 Lite (first and last frame) |
-| Film and portrait sharpening: 720p to 1440p, then 24 fps WebP frames | Real-ESRGAN (`realesr-animevideov3`), run locally |
 
 ---
 
@@ -469,6 +421,26 @@ Face downloads. Loading the models needs several GB of RAM, so give the service 
 To run the frontend and backend as two services instead, point each at `/backend` or `/frontend` as its
 Root Directory with **Config file path** `/backend/railway.toml` or `/frontend/railway.toml`, and set
 `FRONTEND_URL` on the backend and `VITE_BACKEND_URL` on the frontend.
+
+---
+
+## Lumi, the mascot
+
+<table>
+  <tr>
+    <td align="center"><img src="frontend/public/lumi/wave.webp" width="72" alt=""><br><sub>Hello</sub></td>
+    <td align="center"><img src="frontend/public/lumi/search.webp" width="72" alt=""><br><sub>Looking</sub></td>
+    <td align="center"><img src="frontend/public/lumi/beach.webp" width="72" alt=""><br><sub>Beach</sub></td>
+    <td align="center"><img src="frontend/public/lumi/birthday.webp" width="72" alt=""><br><sub>Birthday</sub></td>
+    <td align="center"><img src="frontend/public/lumi/hiking.webp" width="72" alt=""><br><sub>Hiking</sub></td>
+  </tr>
+</table>
+
+Lumi is a small bao-bun bear with a camera lens for a tummy who appears across the app and in the album.
+Each event's CLIP label picks a matching outfit (`backend/mascot.py` `SCENE_POSES`, mirrored in
+`frontend/lib/lumiScenes.ts`). The 30 poses, four colour outfits and album frames were generated once,
+offline, by `tools/mascot/` (Gemini 3.1 Flash Image for poses and frames, Veo 3.1 Lite for the landing
+film, Real-ESRGAN for upscaling) for about $2.60. The app never calls a model to draw Lumi.
 
 ---
 
