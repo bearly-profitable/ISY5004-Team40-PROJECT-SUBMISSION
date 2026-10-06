@@ -1,7 +1,7 @@
 {
   "createdAt": "2026-09-28T06:44:34Z",
-  "dataset": "C:\\Users\\agust\\ISY5004-Team40-PROJECT-SUBMISSION\\report\\Test Images",
-  "cache": "C:\\Users\\agust\\ISY5004-Team40-PROJECT-SUBMISSION\\backend\\eval\\experiments_cache_dinov3.db",
+  "dataset": "report\\Test Images",
+  "cache": "backend\\eval\\experiments_cache_dinov3.db",
   "sceneModel": null,
   "preference": {
     "lr": 0.2,
