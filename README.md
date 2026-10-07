@@ -9,7 +9,7 @@
 Lumina sorts a pile of photos into events and people, picks the best shot of each person at each event,
 and tells you why it chose it.
 
-[Live demo](https://lumina-production-639d.up.railway.app/) ·
+[Live demo](https://luminaphoto.up.railway.app/) ·
 [Product video](https://youtu.be/rqZu26yoBlM) ·
 [App walkthrough](https://youtu.be/ES735eLGOpM) ·
 [Presentation video](https://youtu.be/63fbOCV3cN4) ·
