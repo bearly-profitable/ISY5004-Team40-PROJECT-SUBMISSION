@@ -1,7 +1,7 @@
 # Individual Accomplishment and Contribution
 
 **Agustinus Benyamin Prasetyo**
-Group 40 · Lumina
+Capstone 10 · Lumina
 Teammate: Ong Qing Quan
 
 Lumina takes a batch of personal photos, groups them into events and people, and picks a best shot of each person at each event. I designed the original Semester 1 model, then owned the evaluation and the human study that decided what the Semester 2 model should change.

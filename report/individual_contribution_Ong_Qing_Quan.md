@@ -1,7 +1,7 @@
 # Individual Accomplishment and Contribution
 
 **Ong Qing Quan**
-Group 40 · Lumina
+Capstone 10 · Lumina
 Teammate: Agustinus Benyamin Prasetyo
 
 Lumina takes a batch of personal photos, groups them into events and people, and picks a best shot of each person at each event. Ben's Semester 1 measurements set out what the Semester 2 model had to change. I designed how that model works inside the application, built the backend that runs it, and tested, containerised and deployed the system.
